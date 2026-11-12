@@ -8,8 +8,8 @@ enum DistanceCalculator {
         let h = pow(sin(dLat / 2), 2) + cos(a.latitude * rad) * cos(b.latitude * rad) * pow(sin(dLon / 2), 2)
         return 6_371_000 * 2 * asin(sqrt(min(1, max(0, h))))
     }
-    static func usable(_ fix: GPSFix, now: Date) -> Bool {
-        fix.latitude.isFinite && fix.longitude.isFinite && abs(fix.latitude) <= 90 && abs(fix.longitude) <= 180 && fix.accuracy >= 0 && fix.accuracy <= 50 && abs(fix.timestamp.timeIntervalSince(now)) <= 15
+    static func usable(_ fix: GPSFix, now: Date, notBefore: Date? = nil) -> Bool {
+        fix.latitude.isFinite && fix.longitude.isFinite && abs(fix.latitude) <= 90 && abs(fix.longitude) <= 180 && fix.accuracy >= 0 && fix.accuracy <= 50 && fix.timestamp.timeIntervalSince(now) >= -15 && fix.timestamp.timeIntervalSince(now) <= 1 && (notBefore == nil || fix.timestamp >= notBefore!)
     }
     static func segment(_ a: GPSFix, _ b: GPSFix) -> Double? {
         let seconds = b.timestamp.timeIntervalSince(a.timestamp)
@@ -22,9 +22,14 @@ enum DistanceCalculator {
 enum Validation {
     static func trip(_ d: TripDetails) throws {
         guard Day.date(d.day) != nil else { throw LogError("Enter a valid trip date.") }
+        if d.status != .incomplete {
         guard !d.start.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !d.end.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LogError("Enter both the start and end locations.") }
         guard d.category != .business || !d.purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LogError("Business trips need a business purpose.") }
-        guard d.miles.isFinite, d.miles > 0, d.totalMiles.isFinite else { throw LogError("Miles must be greater than zero.") }
+        }
+        if d.status == .complete, !Recordkeeping.issues(d).isEmpty { throw LogError(Recordkeeping.issues(d).joined(separator: ". ")) }
+        if let start = d.startedAt, let end = d.endedAt, end < start { throw LogError("Trip end time must follow its start time.") }
+        for zone in [d.startTimeZoneID, d.endTimeZoneID].compactMap({ $0 }) where TimeZone(identifier: zone) == nil { throw LogError("Unknown trip time zone.") }
+        guard d.miles.isFinite, d.miles >= 0, (d.status == .incomplete || d.miles > 0), d.totalMiles.isFinite else { throw LogError("Miles must be greater than zero.") }
         guard d.parking >= 0, d.tolls >= 0 else { throw LogError("Parking and tolls cannot be negative.") }
         for value in [d.odometerStart, d.odometerEnd].compactMap({ $0 }) { guard value.isFinite, value >= 0 else { throw LogError("Odometer readings must be positive numbers.") } }
         if let a = d.odometerStart, let b = d.odometerEnd, b < a { throw LogError("End odometer cannot be less than start odometer.") }
@@ -37,12 +42,21 @@ enum Validation {
     static func rate(_ rate: MileageRate, others: [MileageRate]) throws {
         guard rate.cents >= 0, Day.date(rate.startDay) != nil, Day.date(rate.endDay) != nil, rate.startDay <= rate.endDay,
               rate.startDay.hasPrefix("\(rate.taxYear)-"), rate.endDay.hasPrefix("\(rate.taxYear)-"), rate.category != .personal else { throw LogError("Check the rate, year and date range. Both dates must be in the tax year.") }
-        guard !others.contains(where: { $0.id != rate.id && $0.category == rate.category && $0.employer == rate.employer && $0.startDay <= rate.endDay && rate.startDay <= $0.endDay }) else { throw LogError("This rate overlaps another rate for the same category and rate type.") }
+        guard !others.contains(where: { $0.id != rate.id && $0.category == rate.category && $0.employer == rate.employer && $0.effectiveJurisdiction == rate.effectiveJurisdiction && $0.startDay <= rate.endDay && rate.startDay <= $0.endDay }) else { throw LogError("This rate overlaps another rate for the same category and rate type.") }
     }
     static func vehicle(_ v: Vehicle) throws {
         guard !v.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LogError("Give the vehicle a name.") }
         guard Set(v.years.map(\.year)).count == v.years.count else { throw LogError("Only one odometer record per year is allowed.") }
+        if let day = v.businessServiceDay { guard Day.date(day) != nil else { throw LogError("Enter a valid business-service date.") } }
+        if let reading = v.businessServiceOdometer { guard reading.isFinite, reading >= 0 else { throw LogError("Business-service odometer must be nonnegative.") } }
         for y in v.years {
+            for day in [y.startDay, y.endDay].compactMap({ $0 }) {
+                guard Day.date(day) != nil, day.hasPrefix("\(y.year)-") else { throw LogError("Odometer dates must be within their tax year.") }
+            }
+            if let a = y.startDay, let b = y.endDay, b < a { throw LogError("End reading date must follow the start reading date.") }
+            if y.fullYearConfirmed == true {
+                guard y.startRecorded == true, y.end != nil, y.startDay == "\(y.year)-01-01", y.endDay == "\(y.year)-12-31", "\(y.year)-12-31" <= Day.string(Date()) else { throw LogError("A complete annual total needs confirmed January 1 and December 31 readings for a finished year.") }
+            }
             guard (1900...2200).contains(y.year), y.start.isFinite, y.start >= 0, y.end == nil || (y.end!.isFinite && y.end! >= y.start) else { throw LogError("Check yearly odometer readings; end must be at least start.") }
         }
     }
@@ -50,8 +64,17 @@ enum Validation {
 enum RateLookup {
     static func rate(for d: TripDetails, rates: [MileageRate], employer: Bool = false) -> MileageRate? {
         guard d.category != .personal else { return nil }
-        let matches = rates.filter { $0.category == d.category && $0.employer == employer && $0.startDay <= d.day && d.day <= $0.endDay && String($0.taxYear) == String(d.day.prefix(4)) }
+        let matches = rates.filter { $0.category == d.category && $0.employer == employer && $0.effectiveJurisdiction == d.effectiveJurisdiction && $0.startDay <= d.day && d.day <= $0.endDay && String($0.taxYear) == String(d.day.prefix(4)) }
         return matches.count == 1 ? matches.first : nil
+    }
+    static func rate(for trip: Trip, rates: [MileageRate], employer: Bool = false) -> MileageRate? {
+        if trip.ratesCapturedAt != nil { return employer ? trip.employerRate : trip.irsRate }
+        return rate(for: trip.details, rates: rates, employer: employer)
+    }
+    static func amount(for trip: Trip, rates: [MileageRate], employer: Bool = false) -> Decimal? {
+        if trip.details.category == .personal { return 0 }
+        guard let selected = rate(for: trip, rates: rates, employer: employer) else { return nil }
+        return amount(for: trip.details, rates: [selected], employer: employer)
     }
     static func amount(for d: TripDetails, rates: [MileageRate], employer: Bool = false) -> Decimal? {
         if d.category == .personal { return 0 }
@@ -69,43 +92,20 @@ struct Totals {
     var parking: Decimal = 0
     var tolls: Decimal = 0
     var missingRates = 0
+    var incompleteTrips = 0
     init(trips: [Trip], rates: [MileageRate], prefix: String, employer: Bool = false) {
         for t in trips where t.deletedAt == nil && t.details.day.hasPrefix(prefix) && t.details.category != .personal {
             let d = t.details
             miles += d.totalMiles
             if d.category == .business { businessMiles += d.totalMiles }
-            if let amount = RateLookup.amount(for: d, rates: rates, employer: employer) { mileageAmount += amount } else { missingRates += 1 }
+            if !Recordkeeping.isComplete(d) { incompleteTrips += 1 }
+            else if let amount = RateLookup.amount(for: t, rates: rates, employer: employer) { mileageAmount += amount }
+            else { missingRates += 1 }
             parking += d.parking; tolls += d.tolls
         }
     }
     static func businessUse(vehicle: Vehicle, year: VehicleYear, trips: [Trip]) -> Double? {
-        guard let end = year.end, end > year.start else { return nil }
-        let business = trips.filter { $0.deletedAt == nil && $0.details.vehicleID == vehicle.id && $0.details.category == .business && $0.details.day.hasPrefix("\(year.year)-") }.reduce(0) { $0 + $1.details.totalMiles }
-        return business / (end - year.start) * 100
-    }
-}
-enum CSVExporter {
-    static let headers = ["Date", "Vehicle", "Start Location", "End Location", "Business Purpose", "Category", "Miles", "Odometer Start", "Odometer End", "Rate", "Amount", "Parking", "Tolls", "Notes", "Recorded Via", "Created At", "Last Edited At"]
-    static func cell(_ text: String) -> String {
-        // Protect spreadsheet users against formulas in user-entered text.
-        let first = text.trimmingCharacters(in: .whitespacesAndNewlines).first
-        let safe = first.map { "=+-@".contains($0) } == true || text.hasPrefix("\t") || text.hasPrefix("\r") ? "'" + text : text
-        return "\"" + safe.replacingOccurrences(of: "\"", with: "\"\"") + "\""
-    }
-    static func number(_ value: Double) -> String { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), value) }
-    static func decimal(_ value: Decimal) -> String { NSDecimalNumber(decimal: value).stringValue }
-    static func export(_ backup: Backup, employer: Bool = false) -> String {
-        let iso = ISO8601DateFormatter()
-        var rows = [headers.map(cell).joined(separator: ",")]
-        for t in backup.trips.filter({ $0.deletedAt == nil }).sorted(by: { $0.details.day < $1.details.day }) {
-            let d = t.details
-            let rate = RateLookup.rate(for: d, rates: backup.rates, employer: employer)
-            let amount = RateLookup.amount(for: d, rates: backup.rates, employer: employer)
-            let note = d.notes + (d.roundTrip ? "\nRound trip; listed endpoint is turnaround destination. Miles include return." : "")
-            let cells: [String] = [d.day, backup.vehicles.first(where: { $0.id == d.vehicleID })?.name ?? "", d.start.text, d.end.text, d.purpose, d.category.rawValue, number(d.totalMiles), d.odometerStart.map(number) ?? "", d.odometerEnd.map(number) ?? "", rate.map { decimal($0.cents / 100) } ?? "", amount.map(decimal) ?? "", decimal(d.parking), decimal(d.tolls), note, d.method.rawValue, iso.string(from: t.createdAt), iso.string(from: t.updatedAt)]
-            rows.append(cells.map(cell).joined(separator: ","))
-        }
-        return "\u{FEFF}" + rows.joined(separator: "\r\n") + "\r\n"
+        AnnualVehicleSummary(vehicle: vehicle, year: year.year, trips: trips).businessPercent
     }
 }
 
@@ -115,18 +115,20 @@ struct DistanceAccumulator {
     private var previous: GPSFix?
     private var anchor: GPSFix?
     mutating func reset() { previous = nil; anchor = nil }
-    mutating func add(_ fix: GPSFix) -> (meters: Double, gap: Bool) {
-        defer { previous = fix }
-        guard let previous, let anchor else { self.anchor = fix; return (0, false) }
-        guard DistanceCalculator.segment(previous, fix) != nil else {
-            self.anchor = fix
-            return (0, true)
-        }
+    mutating func add(_ fix: GPSFix) -> (meters: Double, gap: Bool, accepted: Bool) {
+        guard fix.latitude.isFinite, fix.longitude.isFinite, abs(fix.latitude) <= 90, abs(fix.longitude) <= 180,
+              fix.accuracy >= 0, fix.accuracy <= 50 else { return (0, true, false) }
+        guard let previous, let anchor else { self.previous = fix; self.anchor = fix; return (0, false, true) }
+        let seconds = fix.timestamp.timeIntervalSince(previous.timestamp)
+        guard seconds > 0 else { return (0, false, false) }
+        if seconds > 30 { self.previous = fix; self.anchor = fix; return (0, true, true) }
+        guard DistanceCalculator.meters(previous, fix) / seconds <= 70 else { return (0, true, false) }
+        self.previous = fix
         let displacement = DistanceCalculator.meters(anchor, fix)
         let threshold = max(5, max(anchor.accuracy, fix.accuracy) * 0.75)
-        guard displacement >= threshold else { return (0, false) }
+        guard displacement >= threshold else { return (0, false, true) }
         self.anchor = fix
-        return (displacement, false)
+        return (displacement, false, true)
     }
 }
 

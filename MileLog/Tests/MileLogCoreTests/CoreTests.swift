@@ -65,8 +65,9 @@ struct RateAndTotalTests {
         #expect(Totals(trips: [business, missing], rates: [rate()], prefix: "2026-07").miles == 10)
     }
     @Test func annualOdometerDenominator() {
-        let v = Vehicle(name: "Car"); let y = VehicleYear(year: 2026, start: 1000, end: 2000)
-        var d = details(miles: 100); d.vehicleID = v.id
+        var v = Vehicle(name: "Car"); let y = VehicleYear(year: 2025, start: 1000, end: 2000, startDay: "2025-01-01", endDay: "2025-12-31", startRecorded: true, fullYearConfirmed: true)
+        v.years = [y]
+        var d = details(day: "2025-07-01", miles: 100); d.vehicleID = v.id
         #expect(Totals.businessUse(vehicle: v, year: y, trips: [trip(d)]) == 10)
         #expect(Totals.businessUse(vehicle: v, year: VehicleYear(start: 0), trips: []) == nil)
     }
@@ -87,10 +88,11 @@ struct ValidationAndExportTests {
         #expect(CSVExporter.cell(" @SUM(A1)").hasPrefix("\"'"))
         var b = Backup(); b.trips = [trip(details())]; b.rates = [rate()]
         let csv = CSVExporter.export(b)
-        #expect(CSVExporter.headers.count == 17)
+        #expect(CSVExporter.headers.contains("Original GPS Meters"))
+        #expect(CSVExporter.headers.contains("Record Status"))
         #expect(csv.contains("\"0.76\",\"7.6\""))
         #expect(csv.hasSuffix("\r\n")); #expect(csv.hasPrefix("\u{FEFF}"))
-        b.rates = []; #expect(CSVExporter.export(b).contains("\"10.000\",\"\",\"\",\"\",\"\""))
+        b.rates = []; #expect(CSVExporter.export(b).contains("\"10.0\",\"\",\"\",\"\",\"\""))
     }
     @Test func backupRoundtripAndSafeMerge() throws {
         var b = Backup(); b.trips = [trip(details())]; b.feedback = [FeedbackNote(text: "Issue")]; b.rates = [rate()]

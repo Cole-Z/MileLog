@@ -2,8 +2,8 @@ import Foundation
 
 enum BackupService {
     static func encode(_ backup: Backup) throws -> Data {
-        var portable = backup
-        portable.version = 2
+        try validate(backup)
+        let portable = Recordkeeping.migrate(backup)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         // Preserve subsecond edit ordering; version 1 used whole-second ISO dates.
@@ -33,7 +33,7 @@ enum BackupService {
     }
 
     static func validate(_ b: Backup) throws {
-        guard b.format == "MileLog", (1...2).contains(b.version) else {
+        guard b.format == "MileLog", (1...3).contains(b.version) else {
             throw LogError("This backup needs a different version of MileLog.")
         }
         var ids = b.trips.map(\.id) + b.vehicles.map(\.id) + b.rates.map(\.id)
@@ -49,11 +49,26 @@ enum BackupService {
             try Validation.trip(t.details)
             try checkVehicle(t.details.vehicleID)
             guard t.updatedAt >= t.createdAt, !t.history.isEmpty else { throw LogError("Backup has an incomplete trip history.") }
+            guard Set(t.history.map(\.id)).count == t.history.count else { throw LogError("Backup contains duplicate trip history entries.") }
             for event in t.history { try Validation.trip(event.details) }
+        }
+        for trip in b.trips {
+            if let original = trip.originalDetails { try Validation.trip(original) }
+            if let evidence = trip.gpsEvidence {
+                guard evidence.meters.isFinite, evidence.meters >= 0, evidence.endedAt == nil || evidence.endedAt! >= evidence.startedAt else { throw LogError("Invalid original recording evidence.") }
+                for fix in [evidence.first, evidence.last].compactMap({ $0 }) {
+                    guard fix.latitude.isFinite, fix.longitude.isFinite, abs(fix.latitude) <= 90, abs(fix.longitude) <= 180, fix.accuracy >= 0, fix.accuracy <= 50 else { throw LogError("Invalid original GPS coordinate.") }
+                }
+            }
+            for rate in [trip.irsRate, trip.employerRate].compactMap({ $0 }) { try Validation.rate(rate, others: []) }
         }
         let sources = b.trips.compactMap(\.sourceDraftID)
         guard Set(sources).count == sources.count else { throw LogError("Backup contains multiple trips from the same recording.") }
-        for v in b.vehicles { try Validation.vehicle(v) }
+        for v in b.vehicles {
+            try Validation.vehicle(v)
+            let history = v.odometerHistory ?? []
+            guard Set(history.map(\.id)).count == history.count else { throw LogError("Backup contains duplicate odometer history entries.") }
+        }
         for r in b.rates { try Validation.rate(r, others: b.rates) }
         for f in b.frequentTrips { try Validation.trip(f.details); try checkVehicle(f.details.vehicleID) }
         for d in b.drafts {
@@ -70,7 +85,7 @@ enum BackupService {
             guard ["draft", "rate", "frequent", "purpose"].contains(tombstone.kind) else { throw LogError("Unknown deleted record type.") }
         }
         if let preferences = b.preferences {
-            guard preferences.schemaVersion == 2 else { throw LogError("These settings require a newer app version.") }
+            guard (2...3).contains(preferences.schemaVersion) else { throw LogError("These settings require a newer app version.") }
             try checkVehicle(preferences.defaultVehicleID)
         }
     }
@@ -86,10 +101,36 @@ enum BackupService {
     static func merge(_ current: Backup, _ imported: Backup) throws -> Backup {
         try validate(current)
         try validate(imported)
+        let current = Recordkeeping.migrate(current)
+        let imported = Recordkeeping.migrate(imported)
         var b = current
-        b.version = 2
+        b.version = 3
         b.trips = mergeRecords(current.trips, imported.trips)
+        let existingTrips = Dictionary(uniqueKeysWithValues: current.trips.map { ($0.id, $0) })
+        let incomingTrips = Dictionary(uniqueKeysWithValues: imported.trips.map { ($0.id, $0) })
+        for i in b.trips.indices {
+            guard let local = existingTrips[b.trips[i].id], let incoming = incomingTrips[b.trips[i].id] else { continue }
+            if let original = local.gpsEvidence, let other = incoming.gpsEvidence, original != other {
+                throw LogError("This backup conflicts with original GPS evidence. Existing records have been kept.")
+            }
+            if let original = local.originalDetails, let other = incoming.originalDetails, original != other {
+                throw LogError("This backup conflicts with an original trip record. Existing records have been kept.")
+            }
+            b.trips[i].gpsEvidence = local.gpsEvidence ?? incoming.gpsEvidence
+            b.trips[i].originalDetails = local.originalDetails ?? incoming.originalDetails
+            b.trips[i].sourceDraftID = local.sourceDraftID ?? incoming.sourceDraftID
+            var events = Dictionary(uniqueKeysWithValues: local.history.map { ($0.id, $0) })
+            for event in incoming.history where events[event.id] == nil { events[event.id] = event }
+            b.trips[i].history = events.values.sorted { $0.at == $1.at ? $0.id.uuidString < $1.id.uuidString : $0.at < $1.at }
+        }
         b.vehicles = mergeRecords(current.vehicles, imported.vehicles)
+        for i in b.vehicles.indices {
+            let histories = (current.vehicles.first { $0.id == b.vehicles[i].id }?.odometerHistory ?? []) +
+                (imported.vehicles.first { $0.id == b.vehicles[i].id }?.odometerHistory ?? [])
+            var events: [UUID: OdometerEdit] = [:]
+            for event in histories where events[event.id] == nil { events[event.id] = event }
+            if !events.isEmpty { b.vehicles[i].odometerHistory = events.values.sorted { $0.at < $1.at } }
+        }
         b.rates = mergeRecords(current.rates, imported.rates)
         b.purposes = mergeRecords(current.purposes, imported.purposes)
         b.frequentTrips = mergeRecords(current.frequentTrips, imported.frequentTrips)
