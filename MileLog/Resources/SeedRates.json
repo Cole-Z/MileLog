@@ -1,0 +1,134 @@
+[
+  {
+    "id": "0091b273-bf8a-539e-b5b2-e9278bbd43d5",
+    "taxYear": 2025,
+    "category": "Business",
+    "cents": 70,
+    "startDay": "2025-01-01",
+    "endDay": "2025-12-31",
+    "employer": false,
+    "source": "IRS Notice 2025-5; verify against current IRS notice",
+    "updatedAt": 0
+  },
+  {
+    "id": "0f850d8a-121f-50f6-b2e4-ec05ef5c3e67",
+    "taxYear": 2025,
+    "category": "Medical",
+    "cents": 21,
+    "startDay": "2025-01-01",
+    "endDay": "2025-12-31",
+    "employer": false,
+    "source": "IRS Notice 2025-5; verify against current IRS notice",
+    "updatedAt": 0
+  },
+  {
+    "id": "18d3b03c-d080-5dac-97e4-acde6ce116d0",
+    "taxYear": 2025,
+    "category": "Moving-military",
+    "cents": 21,
+    "startDay": "2025-01-01",
+    "endDay": "2025-12-31",
+    "employer": false,
+    "source": "IRS Notice 2025-5; verify against current IRS notice",
+    "updatedAt": 0
+  },
+  {
+    "id": "8a470214-4e23-5fa6-8493-4597458149b8",
+    "taxYear": 2025,
+    "category": "Charitable",
+    "cents": 14,
+    "startDay": "2025-01-01",
+    "endDay": "2025-12-31",
+    "employer": false,
+    "source": "IRS Notice 2025-5; verify against current IRS notice",
+    "updatedAt": 0
+  },
+  {
+    "id": "6dbcc59d-434a-5741-9132-531b806fefd5",
+    "taxYear": 2026,
+    "category": "Business",
+    "cents": 72.5,
+    "startDay": "2026-01-01",
+    "endDay": "2026-06-30",
+    "employer": false,
+    "source": "IRS Notice 2026-10; verify against current IRS notice",
+    "updatedAt": 0
+  },
+  {
+    "id": "6e127686-80e1-5eba-8fba-8fc73b6e0a95",
+    "taxYear": 2026,
+    "category": "Medical",
+    "cents": 20.5,
+    "startDay": "2026-01-01",
+    "endDay": "2026-06-30",
+    "employer": false,
+    "source": "IRS Notice 2026-10; verify against current IRS notice",
+    "updatedAt": 0
+  },
+  {
+    "id": "8981f0b2-5425-5a7d-90e0-f2e7a519e2b6",
+    "taxYear": 2026,
+    "category": "Moving-military",
+    "cents": 20.5,
+    "startDay": "2026-01-01",
+    "endDay": "2026-06-30",
+    "employer": false,
+    "source": "IRS Notice 2026-10; verify against current IRS notice",
+    "updatedAt": 0
+  },
+  {
+    "id": "b330952e-bfd1-5e03-8def-be511873d8d8",
+    "taxYear": 2026,
+    "category": "Charitable",
+    "cents": 14,
+    "startDay": "2026-01-01",
+    "endDay": "2026-06-30",
+    "employer": false,
+    "source": "IRS Notice 2026-10; verify against current IRS notice",
+    "updatedAt": 0
+  },
+  {
+    "id": "c066669e-3524-57eb-b3b4-5cd7188eb43f",
+    "taxYear": 2026,
+    "category": "Business",
+    "cents": 76,
+    "startDay": "2026-07-01",
+    "endDay": "2026-12-31",
+    "employer": false,
+    "source": "IRS Announcement 2026-11; verify against current IRS notice",
+    "updatedAt": 0
+  },
+  {
+    "id": "7574513a-cbc2-5f02-bdc4-1490d19b56ba",
+    "taxYear": 2026,
+    "category": "Medical",
+    "cents": 23.5,
+    "startDay": "2026-07-01",
+    "endDay": "2026-12-31",
+    "employer": false,
+    "source": "IRS Announcement 2026-11; verify against current IRS notice",
+    "updatedAt": 0
+  },
+  {
+    "id": "387f941c-1133-5779-84ea-22b15cff60bb",
+    "taxYear": 2026,
+    "category": "Moving-military",
+    "cents": 23.5,
+    "startDay": "2026-07-01",
+    "endDay": "2026-12-31",
+    "employer": false,
+    "source": "IRS Announcement 2026-11; verify against current IRS notice",
+    "updatedAt": 0
+  },
+  {
+    "id": "c1c42f2c-a7ed-5f37-b9c2-e145acbb8f50",
+    "taxYear": 2026,
+    "category": "Charitable",
+    "cents": 14,
+    "startDay": "2026-07-01",
+    "endDay": "2026-12-31",
+    "employer": false,
+    "source": "IRS Announcement 2026-11; verify against current IRS notice",
+    "updatedAt": 0
+  }
+]
