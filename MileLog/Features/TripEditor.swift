@@ -9,6 +9,7 @@ import SwiftUI
     var tolls: String
     var favorite = ""
     var savePurpose = false
+    var refreshRates = false
     var error: String?
     let original: Trip?
     private let initialDetails: TripDetails
@@ -49,12 +50,16 @@ import SwiftUI
         var rounded = Decimal(); NSDecimalRound(&rounded, &decimal, 2, .plain)
         return rounded
     }
-    var previewDetails: TripDetails? {
-        guard let miles = try? number(miles), miles > 0 else { return nil }
-        var details = self.details; details.miles = miles; return details
+    var proposedDetails: TripDetails {
+        let parsed = (try? number(miles)) ?? 0
+        var details = self.details
+        details.miles = Recordkeeping.retainedDistance(stored: initialDetails.miles, displayed: initialDetails.miles == 0 ? "" : Self.display(initialDetails.miles), entered: miles, parsed: parsed)
+        details.status = Recordkeeping.issues(details).isEmpty ? .complete : .incomplete
+        return details
     }
+    var previewDetails: TripDetails? { proposedDetails.miles > 0 ? proposedDetails : nil }
     var hasChanges: Bool {
-        details != initialDetails || !favorite.isEmpty || savePurpose ||
+        details != initialDetails || !favorite.isEmpty || savePurpose || refreshRates ||
         miles != (initialDetails.miles == 0 ? "" : Self.display(initialDetails.miles)) ||
         odoStart != (initialDetails.odometerStart.map(Self.display) ?? "") ||
         odoEnd != (initialDetails.odometerEnd.map(Self.display) ?? "") ||
@@ -65,23 +70,21 @@ import SwiftUI
             guard let start = try number(odoStart), let end = try number(odoEnd), end > start else {
                 throw LogError("Enter an end odometer greater than the start.")
             }
-            miles = Self.display(end - start)
+            miles = (end - start).formatted(.number.grouping(.never).precision(.significantDigits(1...17)))
             details.roundTrip = false
         } catch { self.error = error.localizedDescription }
     }
     func save(store: LogStore, draftID: UUID?) -> Bool {
         do {
             var details = self.details
-            details.miles = try number(miles) ?? 0
-            details.odometerStart = try number(odoStart, optional: true)
-            details.odometerEnd = try number(odoEnd, optional: true)
+            let parsed = miles.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0 : (try number(miles) ?? 0)
+            details.miles = Recordkeeping.retainedDistance(stored: initialDetails.miles, displayed: initialDetails.miles == 0 ? "" : Self.display(initialDetails.miles), entered: miles, parsed: parsed)
+            details.odometerStart = odoStart == (initialDetails.odometerStart.map(Self.display) ?? "") ? initialDetails.odometerStart : try number(odoStart, optional: true)
+            details.odometerEnd = odoEnd == (initialDetails.odometerEnd.map(Self.display) ?? "") ? initialDetails.odometerEnd : try number(odoEnd, optional: true)
             details.parking = try money(parking); details.tolls = try money(tolls)
             details.purpose = details.purpose.trimmingCharacters(in: .whitespacesAndNewlines)
-            if self.details.method == .gps && abs(details.miles - self.details.miles) > 0.00051 {
-                details.method = .manual
-                details.notes += "\nManually corrected GPS mileage (original: \(CSVExporter.number(self.details.miles)) mi)."
-            }
-            try store.saveTrip(original, details: details, draftID: draftID, favorite: favorite, savePurpose: savePurpose)
+            details.status = Recordkeeping.issues(details).isEmpty ? .complete : .incomplete
+            try store.saveTrip(original, details: details, draftID: draftID, favorite: favorite, savePurpose: savePurpose, refreshRates: refreshRates)
             return true
         } catch { self.error = error.localizedDescription; return false }
     }
@@ -94,6 +97,9 @@ struct TripEditor: View {
     @State private var lookup: LocationField?
     @State private var confirmCancel = false
     @State private var addVehicle = false
+    @State private var geocoding = false
+    @State private var geocodeMessage: String?
+    @State private var geocoder = EndpointGeocoder()
     @State private var reviewedDuplicate = false
     @FocusState private var inputFocused: Bool
     let draftID: UUID?
@@ -114,6 +120,16 @@ struct TripEditor: View {
                         Toggle("I checked that this trip isn't already logged", isOn: $reviewedDuplicate)
                     }
                 }
+                Section {
+                    let pending = Recordkeeping.issues(model.proposedDetails)
+                    if pending.isEmpty {
+                        Label("Required details supplied", systemImage: "checkmark.circle").foregroundStyle(Color.mileAccent)
+                    } else {
+                        Label("Will save as incomplete", systemImage: "exclamationmark.circle").foregroundStyle(.orange)
+                        Text(pending.joined(separator: " · ")).font(.caption)
+                    }
+                    Text("Incomplete records stay visible in reports, with blank estimate amounts. Completeness does not establish tax eligibility.").font(.caption).foregroundStyle(.secondary)
+                }
                 Section("Trip details") {
                     DatePicker("Date", selection: Binding(get: { Day.date(model.details.day) ?? Date() }, set: { model.details.day = Day.string($0) }), displayedComponents: .date)
                     Picker("Vehicle", selection: $model.details.vehicleID) {
@@ -126,6 +142,11 @@ struct TripEditor: View {
                 Section("Where did you go?") {
                     locationRow("Start location", field: .start)
                     locationRow("Destination", field: .end)
+                    if model.details.start.latitude != nil || model.details.end.latitude != nil {
+                        Button(geocoding ? "Looking up addresses…" : "Look up recorded endpoint addresses", systemImage: "mappin.and.ellipse") { lookupEndpoints() }.disabled(geocoding)
+                        Text("Sends endpoint coordinates to Apple's geocoding service when tapped. Original coordinates stay unchanged; typing labels works offline.").font(.caption).foregroundStyle(.secondary)
+                        if let geocodeMessage { Text(geocodeMessage).font(.caption).foregroundStyle(.secondary) }
+                    }
                     if !recentPlaces.isEmpty {
                         Menu("Use a recent place", systemImage: "clock") {
                             ForEach(recentPlaces, id: \.text) { place in
@@ -145,13 +166,13 @@ struct TripEditor: View {
                     if model.details.method == .manual { Toggle("Round trip", isOn: $model.details.roundTrip) }
                     if let preview = model.previewDetails {
                         LabeledContent("Total distance", value: "\(preview.totalMiles.formatted(.number.precision(.fractionLength(1...3)))) mi")
-                        if let estimate = RateLookup.amount(for: preview, rates: store.data.rates), preview.category != .personal {
+                        if Recordkeeping.isComplete(preview), let estimate = previewEstimate(preview), preview.category != .personal {
                             LabeledContent("Mileage estimate", value: estimate.money).foregroundStyle(.secondary)
                         }
                     }
                 } header: { Text("Distance") } footer: {
                     if model.details.roundTrip { Text("Enter one-way miles. The total includes the return; your destination is the turnaround point.") }
-                    else if model.details.method == .gps { Text("Measured by GPS. Verify the distance and endpoints. Editing the mileage records a manual correction and keeps the original distance in notes.") }
+                    else if model.details.method == .gps { Text("Measured by GPS. Verify the distance and endpoints. Corrections require a reason and leave original GPS evidence unchanged.") }
                 }
                 Section {
                     TextField(model.details.category == .business ? "What was the business purpose?" : "Purpose (optional)", text: $model.details.purpose, axis: .vertical)
@@ -164,7 +185,36 @@ struct TripEditor: View {
                 } header: { Text("Purpose") } footer: {
                     if model.details.category == .business { Text("Be specific, such as “Client meeting at Acme” or “Materials for the Oak Street job.”") }
                 }
+                if model.details.method == .gps || model.original?.gpsEvidence != nil {
+                    Section("Original recording & corrections") {
+                        if let evidence = model.original?.gpsEvidence {
+                            LabeledContent("Original GPS miles", value: CSVExporter.precise(evidence.meters / DistanceCalculator.metersPerMile))
+                            LabeledContent("Original meters", value: CSVExporter.precise(evidence.meters))
+                            Text("Original endpoints: \(evidence.first?.place.text ?? "Unavailable") → \(evidence.last?.place.text ?? "Unavailable")").font(.caption)
+                            Text("Original start: \(evidence.startedAt.formatted()) [\(evidence.startTimeZoneID ?? "Zone unknown")]").font(.caption)
+                            Text("Original end: \(evidence.endedAt?.formatted() ?? "Not recorded") [\(evidence.endTimeZoneID ?? "Zone unknown")]").font(.caption)
+                            if evidence.interrupted { Label("Recording had gaps; verify the distance", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange) }
+                        } else if model.original != nil { Text("Original GPS evidence was not separately stored by the earlier app version.").font(.caption) }
+                        TextField("Reason for correcting distance, coordinates, or times", text: optionalText(\.correctionReason), axis: .vertical).focused($inputFocused)
+                    }
+                }
                 Section("Optional details") {
+                    DisclosureGroup("Times & time zones") {
+                        Toggle("Record start/end times", isOn: Binding(get: { model.details.startedAt != nil }, set: { enabled in
+                            if enabled {
+                                let day = Day.date(model.details.day) ?? Date()
+                                model.details.startedAt = day; model.details.endedAt = day
+                                model.details.startTimeZoneID = TimeZone.current.identifier; model.details.endTimeZoneID = TimeZone.current.identifier
+                            } else { model.details.startedAt = nil; model.details.endedAt = nil; model.details.startTimeZoneID = nil; model.details.endTimeZoneID = nil }
+                        }))
+                        if model.details.startedAt != nil {
+                            DatePicker("Started", selection: Binding(get: { model.details.startedAt ?? Date() }, set: { model.details.startedAt = $0 }))
+                            DatePicker("Ended", selection: Binding(get: { model.details.endedAt ?? model.details.startedAt ?? Date() }, set: { model.details.endedAt = $0 }))
+                            TextField("Start time zone (e.g. America/Chicago)", text: optionalText(\.startTimeZoneID)).textInputAutocapitalization(.never)
+                            TextField("End time zone", text: optionalText(\.endTimeZoneID)).textInputAutocapitalization(.never)
+                            Text("Times display in this device's time zone. The recorded zone identifiers and UTC instants are retained in exports.").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                     DisclosureGroup("Odometer readings") {
                         TextField("Start odometer", text: $model.odoStart).keyboardType(.decimalPad).focused($inputFocused)
                         TextField("End odometer", text: $model.odoEnd).keyboardType(.decimalPad).focused($inputFocused)
@@ -174,6 +224,9 @@ struct TripEditor: View {
                     DisclosureGroup("Parking, tolls & notes") {
                         LabeledContent("Parking ($)") { TextField("0", text: $model.parking).keyboardType(.decimalPad).multilineTextAlignment(.trailing).focused($inputFocused).accessibilityLabel("Parking dollars") }
                         LabeledContent("Tolls ($)") { TextField("0", text: $model.tolls).keyboardType(.decimalPad).multilineTextAlignment(.trailing).focused($inputFocused).accessibilityLabel("Toll dollars") }
+                        TextField("Parking description", text: optionalText(\.parkingDescription)).focused($inputFocused)
+                        TextField("Toll description", text: optionalText(\.tollsDescription)).focused($inputFocused)
+                        TextField("Receipt/reference note (optional)", text: optionalText(\.evidenceReference)).focused($inputFocused)
                         TextField("Notes", text: $model.details.notes, axis: .vertical).focused($inputFocused)
                     }
                     DisclosureGroup("Save for next time") {
@@ -184,6 +237,9 @@ struct TripEditor: View {
                 }
                 if let original = model.original {
                     Section {
+                        Toggle("Refresh this trip's saved rates", isOn: $model.refreshRates)
+                        Text("Saved rate snapshots keep estimates stable when the rate table changes. Refreshing, or changing the trip date/category, uses the matching current table and records an edit.").font(.caption).foregroundStyle(.secondary)
+                        if let note = original.rateCaptureNote { Text(note).font(.caption).foregroundStyle(.secondary) }
                         DisclosureGroup("Record history · \(original.history.count) events") {
                             LabeledContent("Created", value: original.createdAt.formatted())
                             LabeledContent("Last edited", value: original.updatedAt.formatted())
@@ -193,6 +249,7 @@ struct TripEditor: View {
                                     Text("\(event.details.start.text) → \(event.details.end.text)")
                                     Text("\(event.details.totalMiles.formatted()) mi · \(event.details.category.rawValue)")
                                     Text(event.details.purpose)
+                                    if let reason = event.details.correctionReason { Text("Correction: \(reason)").font(.caption) }
                                     if !event.details.notes.isEmpty { Text(event.details.notes).font(.caption) }
                                 }
                             }
@@ -220,6 +277,33 @@ struct TripEditor: View {
                         if field == .start { model.details.start = place } else { model.details.end = place }
                     }
                 }
+        }
+    }
+    private func optionalText(_ path: WritableKeyPath<TripDetails, String?>) -> Binding<String> {
+        Binding(get: { model.details[keyPath: path] ?? "" }, set: { model.details[keyPath: path] = $0.isEmpty ? nil : $0 })
+    }
+    private func previewEstimate(_ details: TripDetails) -> Decimal? {
+        if var trip = model.original, !model.refreshRates, trip.details.day == details.day, trip.details.category == details.category {
+            trip.details = details
+            return RateLookup.amount(for: trip, rates: store.data.rates)
+        }
+        return RateLookup.amount(for: details, rates: store.data.rates)
+    }
+    private func lookupEndpoints() {
+        geocoding = true; geocodeMessage = nil
+        let start = model.details.start, end = model.details.end
+        Task { @MainActor in
+            defer { geocoding = false }
+            var failures = 0
+            for (place, isStart) in [(start, true), (end, false)] where place.latitude != nil && place.longitude != nil {
+                do {
+                    let label = try await geocoder.label(for: place)
+                    // Do not replace a newer user edit while an async request was in flight.
+                    if isStart && model.details.start == start { model.details.start.text = label }
+                    if !isStart && model.details.end == end { model.details.end.text = label }
+                } catch { failures += 1 }
+            }
+            geocodeMessage = failures == 0 ? "Endpoint labels updated. GPS coordinates are unchanged." : "Some addresses are unavailable. Enter their labels manually; recorded coordinates are unchanged."
         }
     }
     private func locationRow(_ title: String, field: LocationField) -> some View {

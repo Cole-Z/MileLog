@@ -20,8 +20,7 @@ struct TripsView: View {
 
     private var filteredTrips: [Trip] {
         store.trips.filter { trip in
-            filters.includes(trip) && (search.isEmpty || [trip.details.start.text, trip.details.end.text, trip.details.purpose, trip.details.notes]
-                .contains { $0.localizedCaseInsensitiveContains(search) })
+            filters.includes(trip) && trip.matchesSearch(search)
         }
     }
     private var groups: [String: [Trip]] { Dictionary(grouping: filteredTrips, by: { $0.details.day }) }
@@ -42,6 +41,10 @@ struct TripsView: View {
                                 details.day = Day.string(Date()); details.method = .manual
                                 details.odometerStart = nil; details.odometerEnd = nil
                                 details.parking = 0; details.tolls = 0; details.notes = ""
+                                details.startedAt = nil; details.endedAt = nil
+                                details.startTimeZoneID = nil; details.endTimeZoneID = nil
+                                details.correctionReason = nil; details.evidenceReference = nil
+                                details.parkingDescription = nil; details.tollsDescription = nil; details.status = nil
                                 editor = TripPresentation(details: details)
                             } label: {
                                 Label(frequent.name, systemImage: "arrow.turn.down.right").foregroundStyle(Color.mileAccent)
@@ -67,7 +70,7 @@ struct TripsView: View {
                 } else {
                     Section {
                         HStack {
-                            Text("\(filteredTrips.count) trips").font(.subheadline.weight(.semibold))
+                            Text(Recordkeeping.plural(filteredTrips.count, "trip")).font(.subheadline.weight(.semibold))
                             Spacer()
                             Text("\(filteredTrips.reduce(0) { $0 + $1.details.totalMiles }.formatted(.number.precision(.fractionLength(1)))) mi")
                                 .font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
@@ -144,8 +147,8 @@ struct TripsView: View {
                     }
                 }
             } else {
-                Text("Ready for your\nnext work trip?").font(.system(.title, design: .rounded, weight: .bold))
-                Text("Start while parked. Keep recording through screen lock and navigation.").font(.subheadline).foregroundStyle(.white.opacity(0.85))
+                Text(store.trips.isEmpty ? "Ready for your\nnext work trip?" : "Ready for your next trip?").font(.system(store.trips.isEmpty ? .title : .title3, design: .rounded, weight: .bold))
+                if store.trips.isEmpty { Text("Start while parked. Keep recording through screen lock and navigation.").font(.subheadline).foregroundStyle(.white.opacity(0.85)) }
                 adaptiveLayout {
                     Button("Start trip", systemImage: "location.fill") { recorder.start() }.buttonStyle(.borderedProminent).tint(Color.mileMint).foregroundStyle(Color.mileInk)
                     Button("Add manually", systemImage: "plus", action: addManual).buttonStyle(.bordered).tint(.white)
@@ -166,19 +169,22 @@ struct TripsView: View {
                 MetricView(title: "Business miles", value: totals.businessMiles.formatted(.number.precision(.fractionLength(1))))
                 MetricView(title: "Estimated deduction", value: totals.mileageAmount.money)
             }.padding(.vertical, 5)
+            if totals.incompleteTrips > 0 { Label("\(Recordkeeping.plural(totals.incompleteTrips, "incomplete trip")): add missing details to include an estimate.", systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange) }
             if totals.missingRates > 0 { Label("Some trips need a mileage rate. This estimate is incomplete.", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange) }
         } header: { Text("This month") } footer: { Text("Mileage only. An estimate of deductible expenses, not tax savings.") }
     }
     private func tripRow(_ trip: Trip) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .firstTextBaseline) {
-                Text(trip.details.end.text).font(.headline).foregroundStyle(.primary)
+                Text(Recordkeeping.isCoordinateLabel(trip.details.end.text) || trip.details.end.text.isEmpty ? (trip.details.purpose.isEmpty ? "Destination needs a label" : trip.details.purpose) : trip.details.end.text).font(.headline).foregroundStyle(.primary)
                 Spacer(minLength: 12)
                 Text("\(trip.details.totalMiles.formatted(.number.precision(.fractionLength(1)))) mi")
                     .font(.headline).monospacedDigit().foregroundStyle(.primary)
             }
-            Text("From \(trip.details.start.text)").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            Text(Recordkeeping.isCoordinateLabel(trip.details.start.text) ? "Origin coordinates in trip details" : "From \(trip.details.start.text)").font(.caption).foregroundStyle(.secondary).lineLimit(2)
             if !trip.details.purpose.isEmpty { Text(trip.details.purpose).font(.subheadline).foregroundStyle(.secondary) }
+            if !Recordkeeping.isComplete(trip.details) { Label("Incomplete record", systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange) }
+            if trip.details.correctionReason != nil { Label(trip.gpsEvidence == nil ? "Corrected · see edit history" : "Corrected · original evidence retained", systemImage: "pencil").font(.caption).foregroundStyle(.secondary) }
             HStack(spacing: 8) {
                 Text(trip.details.category.rawValue).font(.caption.weight(.medium)).foregroundStyle(Color.mileAccent)
                 Text("· \(trip.details.method.rawValue)").font(.caption).foregroundStyle(.secondary)
@@ -233,6 +239,7 @@ struct ReportsView: View {
         @Bindable var store = store
         let trips = store.reportTrips
         let totals = Totals(trips: trips, rates: store.data.rates, prefix: "", employer: store.report.employer)
+        let report = MileageReport(backup: store.data, employer: store.report.employer, selected: trips, years: store.report.years(in: store.data), vehicleIDs: store.report.vehicleID.map { Set([$0]) })
         NavigationStack {
             List {
                 Section {
@@ -242,37 +249,62 @@ struct ReportsView: View {
                 ReportFilterFields(selection: $store.report)
                 Section("Calculation") {
                     Toggle("Use employer rates", isOn: $store.report.employer)
-                    Text(store.report.employer ? "Uses your custom employer rate table. Add rates in Settings." : "Uses the IRS rate table by trip date. Eligibility depends on your circumstances.")
+                    Text(store.report.employer ? "Employer reimbursement estimate, using saved rate snapshots. This is not necessarily a deductible amount." : "IRS deduction estimate using trip-date rate snapshots. Ordinary W-2 employees generally cannot deduct unreimbursed mileage federally; reimbursement and specific exceptions may apply.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
                     LabeledContent("Trips", value: String(trips.count))
+                    if report.incomplete > 0 { Label("\(Recordkeeping.plural(report.incomplete, "incomplete record")): retained in exports with blank estimate amounts.", systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+                    if report.unassignedVehicles > 0 { Text("\(Recordkeeping.plural(report.unassignedVehicles, "trip")) without an assigned vehicle: excluded from vehicle annual summaries.").font(.caption).foregroundStyle(.orange) }
                     LabeledContent("Logged miles", value: trips.reduce(0) { $0 + $1.details.totalMiles }.formatted(.number.precision(.fractionLength(1))))
                     LabeledContent("Business miles", value: totals.businessMiles.formatted(.number.precision(.fractionLength(1))))
-                    LabeledContent(store.report.employer ? "Mileage reimbursement estimate" : "Mileage deduction estimate", value: totals.mileageAmount.money)
+                    LabeledContent(store.report.employer ? "Mileage reimbursement estimate" : "Mileage deduction estimate", value: report.total.money)
                     LabeledContent("Nonpersonal parking", value: totals.parking.money)
                     LabeledContent("Nonpersonal tolls", value: totals.tolls.money)
                     if totals.missingRates > 0 {
-                        Label("\(totals.missingRates) trips have no matching rate. The estimate is incomplete; CSV amounts will be blank for those trips.", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                        Label("\(Recordkeeping.plural(totals.missingRates, "trip")) without a matching rate: estimate amounts are blank in exports.", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
                     }
                 } header: { Text(store.report.label) } footer: {
                     Text("Personal miles are included in logged miles when selected, but excluded from deduction/reimbursement estimates. Parking and tolls are separate from mileage.")
                 }
+                if !report.annual.isEmpty {
+                    Section {
+                        ForEach(Array(report.annual.enumerated()), id: \.offset) { _, annual in
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("\(annual.vehicleName) · \(String(annual.year))").font(.headline)
+                                Text("Business miles logged: \(annual.businessMiles.formatted(.number.precision(.fractionLength(1...3))))")
+                                Text(annual.annualMiles.map { "Recorded annual total: \($0.formatted()) mi" } ?? "Annual total: missing or unconfirmed")
+                                if let percentage = annual.businessPercent { Text("Recorded business use: \(percentage.formatted(.number.precision(.fractionLength(1))))%") }
+                                if annual.incompleteTrips > 0 { Text("\(Recordkeeping.plural(annual.incompleteTrips, "incomplete business record")) in this year.").foregroundStyle(.orange) }
+                                Text(annual.note).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    } header: { Text("Annual vehicle records") } footer: { Text("Uses all saved business trips for each full calendar year, independently of the report's narrower date/category filter. No annual totals are inferred from GPS trips.") }
+                }
+                if !report.ratePeriods.isEmpty {
+                    Section("Applied rate periods") { ForEach(report.ratePeriods, id: \.self) { Text($0).font(.caption) } }
+                }
                 Section {
                     Button(action: export) {
-                        Label("Export \(trips.count) trips as CSV", systemImage: "square.and.arrow.up")
+                        Label("Export \(Recordkeeping.plural(trips.count, "trip")) as CSV", systemImage: "square.and.arrow.up")
                             .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
                     }.buttonStyle(.borderedProminent).tint(Color.mileTeal).foregroundStyle(.white).disabled(trips.isEmpty || !store.report.valid)
-                    Text("Includes only the trips selected above, with dates, locations, purposes, vehicles, miles, rates, and expenses.")
+                    Button("Share printable PDF", systemImage: "doc.richtext") { exportPDF() }.disabled(trips.isEmpty || !store.report.valid)
+                    Text("Includes the selected trips, original/adjusted mileage, times, locations, purposes, expenses, rate periods, and completeness warnings. Currency is rounded per trip to cents; summaries sum those same amounts.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }.navigationTitle("Reports").sheet(item: $file) { ShareSheet(url: $0.url) }.errorAlert($error)
         }
     }
+    private func exportPDF() {
+        do {
+            let data = PDFReportExporter.export(backup: store.data, selection: store.report)
+            file = ShareFile(url: try store.writeFile(data, name: "MileLog-report-\(Day.string(Date()))-\(UUID().uuidString.prefix(6)).pdf"))
+        } catch { self.error = error.localizedDescription }
+    }
     private func export() {
         do {
-            var selected = store.data; selected.trips = store.reportTrips
-            let csv = CSVExporter.export(selected, employer: store.report.employer)
+            let csv = CSVExporter.export(store.data, employer: store.report.employer, selected: store.reportTrips)
             file = ShareFile(url: try store.writeFile(Data(csv.utf8), name: "MileLog-\(store.report.employer ? "employer" : "mileage")-\(Day.string(Date()))-\(UUID().uuidString.prefix(6)).csv"))
         } catch { self.error = error.localizedDescription }
     }

@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import CoreLocation
 
 extension Decimal {
     var money: String { NSDecimalNumber(decimal: self).doubleValue.formatted(.currency(code: "USD")) }
@@ -56,3 +57,22 @@ struct PlaceSearchView: View {
     }
 }
 #Preview("Place search") { PlaceSearchView(initial: "Post office") { _ in } }
+
+@MainActor final class EndpointGeocoder {
+    private var cache: [String: String] = [:]
+    private let geocoder = CLGeocoder()
+    func label(for place: Place) async throws -> String {
+        guard let latitude = place.latitude, let longitude = place.longitude else { throw LogError("No recorded coordinates.") }
+        let key = "\(latitude),\(longitude)"
+        if let cached = cache[key] { return cached }
+        let results = try await geocoder.reverseGeocodeLocation(CLLocation(latitude: latitude, longitude: longitude))
+        guard let result = results.first else { throw LogError("Address unavailable.") }
+        let parts = [result.name, result.locality, result.administrativeArea].compactMap { $0 }.filter { !$0.isEmpty }
+        var seen = Set<String>()
+        let label = parts.filter { seen.insert($0).inserted }.joined(separator: ", ")
+        guard !label.isEmpty else { throw LogError("Address unavailable.") }
+        if cache.count >= 64 { cache.removeAll() }
+        cache[key] = label
+        return label
+    }
+}

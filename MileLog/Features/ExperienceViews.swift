@@ -104,9 +104,9 @@ struct PrivacyView: View {
                 Text("Location is used only for trips you explicitly start. Recording can continue with the screen locked or while another app is open, and stops when you pause or end the trip. MileLog does not automatically detect drives. You can revoke location access in iPhone Settings and continue to enter trips manually.")
             }
             Section("Apple Maps and sharing") {
-                Text("Optional place search sends your search to Apple Maps. You can type locations without using that service. Apple's privacy practices apply to its services.")
+                Text("Optional place search sends your search to Apple Maps. Look up endpoint names sends the saved endpoint coordinates to Apple's geocoding service only when you tap it. Results are cached in memory while the editor is open. You can type labels without using either service; original GPS coordinates are retained. Apple's privacy practices apply to its services.")
                 Link("Apple Maps & Privacy", destination: URL(string: "https://www.apple.com/legal/privacy/data/en/apple-maps/")!)
-                Text("CSV exports and backups leave the app when you choose a destination in the share sheet. That destination handles the copy under its own policies. iOS device backups may also contain app data, depending on your device settings.")
+                Text("CSV/PDF reports and backups leave the app when you choose a destination in the share sheet. That destination handles the copy under its own policies. iOS device backups may also contain app data, depending on your device settings.")
             }
             Section("Retention and deletion") {
                 Text("Deleting a trip removes it from the active log but keeps its history in backups. Settings → Erase all local data removes the log, history, drafts, preferences, and local export/recovery files. Deleting MileLog also removes its local data. Copies you previously exported or included in device backups must be managed separately.")
@@ -131,7 +131,13 @@ struct HelpView: View {
                 Text("Tap Add manually. Enter the date, locations, miles, and purpose. For round trips, enter the one-way miles and enable Round trip. Optional details include odometers, parking, tolls, and notes.")
             }
             Section("Prepare a report") {
-                Text("Choose Reports, select the dates and vehicle, and review the category. Business is selected by default. Exported CSV rows use exactly those filters. Missing rates leave amounts blank; parking and tolls stay separate.")
+                Text("Choose Reports, select the dates and vehicle, and review the category. Business is selected by default. CSV and PDF use those trip filters. Incomplete records and missing rates leave amounts blank; parking and tolls stay separate. Enter annual odometers in Settings → Vehicles; partial-year readings are not annual totals.")
+            }
+            Section("Records and eligibility") {
+                Text("Records support substantiation but do not establish tax eligibility. Include a business destination and purpose. Ordinary commuting between home and a regular workplace is generally personal, not business travel.")
+                Text("Ordinary W-2 employees generally cannot claim federal deductions for unreimbursed business mileage, although specific exceptions may apply. Employer reimbursement is separate from deductibility. MileLog does not make personalized tax determinations.")
+                Link("IRS Publication 463", destination: URL(string: "https://www.irs.gov/publications/p463")!)
+                Link("IRS mileage rates", destination: URL(string: "https://www.irs.gov/tax-professionals/standard-mileage-rates")!)
             }
             Section("Protect your log") {
                 Text("Create a backup in Settings and save it outside MileLog, such as to Files. Do this regularly and before updating or deleting the app. Local recovery copies are removed when the app is deleted.")

@@ -8,6 +8,7 @@ import UIKit
     private var accumulator = DistanceAccumulator()
     private var pendingStart = false
     private var checkpointAt = Date.distantPast
+    private var recordingSegmentStartedAt = Date.distantPast
     private(set) var draft: RecordingDraft?
     private(set) var recording = false
     var status = "Ready when you are"
@@ -26,6 +27,7 @@ import UIKit
         if var recovered = draft {
             if !recovered.ended {
                 recovered.interrupted = true; recovered.updatedAt = Date()
+                recovered.interruptionReasons = Array(Set((recovered.interruptionReasons ?? []) + ["Recovered after app interruption"]))
                 _ = persist(recovered)
             }
             status = "Saved recording recovered — review before continuing"
@@ -50,10 +52,12 @@ import UIKit
             return
         }
         var value = draft ?? RecordingDraft()
+        if draft == nil { value.startDay = Day.string(value.createdAt); value.startTimeZoneID = TimeZone.current.identifier }
         if value.vehicleID == nil { value.vehicleID = store.defaultVehicleID }
         value.updatedAt = Date()
         guard persist(value) else { return }
         accumulator.reset()
+        recordingSegmentStartedAt = Date()
         recording = true
         status = "Waiting for an accurate location…"
         manager.allowsBackgroundLocationUpdates = true
@@ -91,6 +95,7 @@ import UIKit
         stopUpdates()
         if var value = draft {
             value.interrupted = true; value.updatedAt = Date()
+            value.interruptionReasons = Array(Set((value.interruptionReasons ?? []) + ["Explicit pause"]))
             if persist(value) { status = "Paused — movement during this pause is not recorded" }
         }
     }
@@ -101,7 +106,11 @@ import UIKit
         pendingStart = false
         stopUpdates()
         if var value = draft {
-            if value.last == nil || Date().timeIntervalSince(value.last!.timestamp) > 30 { value.interrupted = true }
+            if value.last == nil || Date().timeIntervalSince(value.last!.timestamp) > 30 {
+                value.interrupted = true
+                value.interruptionReasons = Array(Set((value.interruptionReasons ?? []) + ["No recent fix at trip end"]))
+            }
+            if !value.ended { value.endedAt = Date(); value.endTimeZoneID = TimeZone.current.identifier }
             value.ended = true; value.updatedAt = Date()
             if persist(value) { status = "Ready to review and save"; return true }
         }
@@ -118,16 +127,7 @@ import UIKit
         do { try store.removeRecord(id: draft.id, kind: "draft"); refresh() }
         catch { self.error = error.localizedDescription }
     }
-    func details() -> TripDetails {
-        var details = TripDetails()
-        guard let draft else { return details }
-        details.day = Day.string(draft.createdAt); details.method = .gps
-        details.miles = draft.meters / DistanceCalculator.metersPerMile
-        details.start = draft.first?.place ?? Place(); details.end = draft.last?.place ?? Place()
-        details.vehicleID = draft.vehicleID ?? store.defaultVehicleID
-        if draft.interrupted { details.notes = "Recording includes a pause, signal gap, or recovery. Verify the distance and correct any missing miles." }
-        return details
-    }
+    func details() -> TripDetails { draft?.recordedDetails ?? TripDetails() }
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         if pendingStart && (manager.authorizationStatus == .authorizedWhenInUse || manager.authorizationStatus == .authorizedAlways) { begin() }
         else if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted {
@@ -139,15 +139,26 @@ import UIKit
     }
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard recording, var value = draft else { return }
-        for location in locations {
+        for location in locations.sorted(by: { $0.timestamp < $1.timestamp }) {
             let fix = GPSFix(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude, accuracy: location.horizontalAccuracy, timestamp: location.timestamp)
-            guard DistanceCalculator.usable(fix, now: Date()) else {
+            // Core Location may deliver a cached fix from before Start/Resume.
+            // It must never become an anchor that bridges a paused interval.
+            guard fix.timestamp >= recordingSegmentStartedAt else { continue }
+            guard DistanceCalculator.usable(fix, now: Date(), notBefore: recordingSegmentStartedAt) else {
+                value.rejectedFixes = (value.rejectedFixes ?? 0) + 1
+                value.interrupted = true
+                value.interruptionReasons = Array(Set((value.interruptionReasons ?? []) + ["Rejected inaccurate, stale, or future sample"]))
                 status = "Weak location signal — waiting for accuracy"
                 continue
             }
             let segment = accumulator.add(fix)
             value.meters += segment.meters
-            if segment.gap { value.interrupted = true }
+            if segment.gap {
+                value.interrupted = true
+                value.interruptionReasons = Array(Set((value.interruptionReasons ?? []) + ["Signal gap or impossible jump"]))
+            }
+            guard segment.accepted else { value.rejectedFixes = (value.rejectedFixes ?? 0) + 1; continue }
+            value.acceptedFixes = (value.acceptedFixes ?? 0) + 1
             if value.first == nil {
                 if fix.timestamp.timeIntervalSince(value.createdAt) > 30 { value.interrupted = true }
                 value.first = fix
@@ -162,6 +173,11 @@ import UIKit
     }
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         if let error = error as? CLError, error.code == .locationUnknown {
+            if var value = draft, recording {
+                value.interrupted = true; value.updatedAt = Date()
+                value.interruptionReasons = Array(Set((value.interruptionReasons ?? []) + ["Location unavailable"]))
+                guard persist(value) else { return }
+            }
             status = "Location unavailable — waiting for signal"
             return
         }

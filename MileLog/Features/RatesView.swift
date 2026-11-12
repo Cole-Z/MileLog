@@ -5,7 +5,7 @@ struct RatesView: View {
     @State private var editing: MileageRate?
     var body: some View {
         List {
-            Section { Text("Seed rates are editable estimates. Verify dates and amounts against the current IRS notice before using them. Changes recalculate totals and future CSV exports.").font(.footnote); Link("IRS standard mileage rates", destination: URL(string: "https://www.irs.gov/tax-professionals/standard-mileage-rates")!) }
+            Section { Text("Rates apply by trip date and category. Saved trips retain their rate snapshots when this table changes. To recalculate a saved trip, open it and choose Refresh saved rates; changing its date or category also refreshes its rates. Verify rates against the official IRS source. Employer reimbursement rates are separate.").font(.footnote); Link("IRS standard mileage rates", destination: URL(string: "https://www.irs.gov/tax-professionals/standard-mileage-rates")!) }
             ForEach(store.data.rates.sorted { $0.startDay == $1.startDay ? $0.category.rawValue < $1.category.rawValue : $0.startDay > $1.startDay }) { rate in
                 Button { editing = rate } label: {
                     VStack(alignment: .leading, spacing: 4) {
@@ -41,7 +41,7 @@ struct RateEditor: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.bold() }
             }.errorAlert($error).interactiveDismissDisabled()
-                .confirmationDialog("Delete this rate? Affected trips will show a missing rate.", isPresented: $deleting, titleVisibility: .visible) { Button("Delete rate", role: .destructive) { do { try store.removeRecord(id: rate.id, kind: "rate"); dismiss() } catch { self.error = error.localizedDescription } } }
+                .confirmationDialog("Delete this rate from the table? Existing trip snapshots are retained. New or explicitly refreshed trips may have no matching rate.", isPresented: $deleting, titleVisibility: .visible) { Button("Delete rate", role: .destructive) { do { try store.removeRecord(id: rate.id, kind: "rate"); dismiss() } catch { self.error = error.localizedDescription } } }
         }
     }
     private func save() {

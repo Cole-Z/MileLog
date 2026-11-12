@@ -66,7 +66,7 @@ struct SettingsView: View {
                         incoming = try BackupService.decode(Data(contentsOf: url)); confirmRestore = true
                     } catch { message = error.localizedDescription }
                 }
-                .confirmationDialog("Restore \(incoming?.trips.filter { $0.deletedAt == nil }.count ?? 0) trips from this backup? Newer records are kept. We'll save a recovery copy first.", isPresented: $confirmRestore, titleVisibility: .visible) {
+                .confirmationDialog("Restore \(Recordkeeping.plural(incoming?.trips.filter { $0.deletedAt == nil }.count ?? 0, "trip")) from this backup? Newer records are kept. We'll save a recovery copy first.", isPresented: $confirmRestore, titleVisibility: .visible) {
                     Button("Merge backup") {
                         do {
                             guard let incoming, !recorder.recording else { return }
