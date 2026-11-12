@@ -41,7 +41,7 @@ struct RateEditor: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.bold() }
             }.errorAlert($error).interactiveDismissDisabled()
-                .confirmationDialog("Delete this rate? Affected trips will show a missing rate.", isPresented: $deleting, titleVisibility: .visible) { Button("Delete rate", role: .destructive) { do { var b = store.data; b.rates.removeAll { $0.id == rate.id }; try store.commit(b); dismiss() } catch { self.error = error.localizedDescription } } }
+                .confirmationDialog("Delete this rate? Affected trips will show a missing rate.", isPresented: $deleting, titleVisibility: .visible) { Button("Delete rate", role: .destructive) { do { try store.removeRecord(id: rate.id, kind: "rate"); dismiss() } catch { self.error = error.localizedDescription } } }
         }
     }
     private func save() {

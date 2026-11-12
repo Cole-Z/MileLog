@@ -2,7 +2,7 @@
 
 1. Open Xcode once, accept its license and complete any requested component installation. This project requires Xcode 16 or later and an iPhone on iOS 17 or later. Your Xcode version must support the iPhone's installed iOS version.
 2. Open `MileLog.xcodeproj` from this folder. Close any older window showing the **MileLogCore** scheme. The project opens the iPhone app; the separate package in `MileLog/Package.swift` is only for Mac unit tests.
-3. In **Xcode → Settings → Accounts**, add your Apple Account. A free Personal Team is sufficient for this MVP.
+3. In **Xcode → Settings → Accounts**, add your Apple Account. A free Personal Team is sufficient for local iPhone testing.
 4. Select the blue **MileLog** project in the navigator, then **TARGETS → MileLog → Signing & Capabilities**. Enable **Automatically manage signing** and select your **Personal Team**.
 5. The initial bundle identifier is `com.colezill.MileLog`. If Xcode says it is unavailable, choose a unique identifier such as `com.yourname.MileLog`. Once the app contains real data, keep this identifier and signing team unchanged.
 6. Connect the unlocked iPhone by cable. Tap **Trust This Computer** on the iPhone and enter its passcode. In Xcode, use **Window → Devices and Simulators → Devices** to check that pairing/device preparation is complete. No simulator installation or testing is needed.
@@ -28,11 +28,17 @@ Free Personal Team provisioning profiles expire seven days after issuance. For t
 
 Signing is the only project-specific setup you must do by hand. The project already includes:
 
-- `NSLocationWhenInUseUsageDescription`: explains intentional foreground recording.
+- `NSLocationWhenInUseUsageDescription`: explains user-started recording through screen lock and navigation.
 - iOS 17 deployment target, Swift 6 and iPhone target family.
 - File sharing so local recovery copies are accessible in Files/Finder.
-- A single foreground scene with local SwiftData storage.
+- A single app scene with local SwiftData storage.
+- Background Modes → Location updates for an explicitly started trip.
+- App icon resources, privacy manifest, version 1.0/build 2.
 
-No Always location key, background location mode, iCloud, push notification or paid capability is enabled. Keep those disabled for the MVP. CoreLocation and MapKit link automatically through Swift imports.
+No Always location key, iCloud sync, push notification, or automatic drive detection is enabled. Keep the location background mode enabled for user-started recording. CoreLocation and MapKit link automatically through Swift imports.
 
 If startup reports a store error, keep the app installed and send the error text. Do not reset or delete its container. If necessary, Xcode's Devices window can download the app container for recovery; it contains private data.
+
+## Refinement testing constraint
+
+Use only your physical iPhone. Keep the SwiftUI preview canvas closed; do not boot simulators or run automated tests unless explicitly requested. The owner will perform the manual checks in TEST_PERIOD.md. Build 2 has not been built or tested by the assistant.

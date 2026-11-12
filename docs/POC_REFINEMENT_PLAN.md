@@ -1,8 +1,10 @@
 # MileLog review and refinement plan
 
+Historical review preceding the approved implementation. See README.md for current behavior and docs/TEST_PERIOD.md for the owner-run checks. The owner approved implementation, supplied contact@collectoratlas.app, and requested no further test runs or simulator use.
+
 Reviewed November 12, 2026. This is a proposed implementation scope for a solo builder. The goal is a polished, dependable POC followed by a submission-ready first release; business setup and developer enrollment can proceed separately. Application code has not been changed during this review.
 
-**Testing constraint:** use the owner's physical iPhone for all app runtime and UI testing. Do not boot or use iOS simulators; the development computer cannot handle their resource use. Mac core unit tests and iPhone-targeted build checks remain appropriate. The simulator activity recorded below predates this instruction and has been stopped.
+**Testing constraint:** use the owner's physical iPhone for all app runtime and UI testing. Do not boot or use iOS simulators; the development computer cannot handle their resource use. The owner will run all manual checks; do not run automated tests or simulators unless requested. The simulator activity recorded below predates this instruction and has been stopped.
 
 **Recommendation:** retain the native SwiftUI app and local storage. Focus the first release on US mileage recordkeeping: fast manual entry, trips the user explicitly starts and stops, business/personal classification, and useful exports. Improve reliability before adding more features.
 

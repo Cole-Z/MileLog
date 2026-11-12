@@ -9,7 +9,7 @@ struct VehiclesView: View {
             ForEach(store.data.vehicles) { vehicle in
                 Button { editing = vehicle } label: {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(vehicle.name).font(.headline)
+                        HStack { Text(vehicle.name).font(.headline); if store.defaultVehicleID == vehicle.id { Text("Default").font(.caption).foregroundStyle(.secondary) } }
                         Text([vehicle.year, vehicle.make, vehicle.model].filter { !$0.isEmpty }.joined(separator: " ")).font(.caption).foregroundStyle(.secondary)
                         ForEach(vehicle.years.sorted { $0.year > $1.year }) { year in
                             if let percent = Totals.businessUse(vehicle: vehicle, year: year, trips: store.trips) {
@@ -29,6 +29,12 @@ struct VehicleEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State var vehicle: Vehicle
     @State private var error: String?
+    @State private var makeDefault = false
+    var onSave: (Vehicle) -> Void
+    init(vehicle: Vehicle, onSave: @escaping (Vehicle) -> Void = { _ in }) {
+        _vehicle = State(initialValue: vehicle)
+        self.onSave = onSave
+    }
     var body: some View {
         NavigationStack {
             Form {
@@ -38,6 +44,7 @@ struct VehicleEditor: View {
                     TextField("Make", text: $vehicle.make)
                     TextField("Model", text: $vehicle.model)
                     TextField("Plate (optional)", text: $vehicle.plate)
+                    Toggle("Use as my default vehicle", isOn: $makeDefault).disabled(store.defaultVehicleID == vehicle.id || store.data.vehicles.isEmpty)
                 }
                 Section {
                     ForEach($vehicle.years) { $year in
@@ -52,11 +59,12 @@ struct VehicleEditor: View {
             }.navigationTitle("Vehicle").navigationBarTitleDisplayMode(.inline).toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.bold() }
-            }.errorAlert($error).interactiveDismissDisabled()
+            }.errorAlert($error).interactiveDismissDisabled().scrollDismissesKeyboard(.interactively)
+                .onAppear { makeDefault = store.defaultVehicleID == vehicle.id || store.data.vehicles.isEmpty }
         }
     }
     private func save() {
-        do { try Validation.vehicle(vehicle); vehicle.updatedAt = Date(); var b = store.data; b.vehicles.removeAll { $0.id == vehicle.id }; b.vehicles.append(vehicle); try store.commit(b); dismiss() } catch { self.error = error.localizedDescription }
+        do { try store.saveVehicle(vehicle, makeDefault: makeDefault); onSave(vehicle); dismiss() } catch { self.error = error.localizedDescription }
     }
 }
 #Preview("Vehicles") { NavigationStack { VehiclesView().environment(PreviewData.store()) } }
