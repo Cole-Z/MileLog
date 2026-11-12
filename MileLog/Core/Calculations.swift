@@ -108,3 +108,59 @@ enum CSVExporter {
         return "\u{FEFF}" + rows.joined(separator: "\r\n") + "\r\n"
     }
 }
+
+/// Keep an anchor until movement exceeds uncertainty, while checking time/speed
+/// against every consecutive fix. Small real movements can then accumulate.
+struct DistanceAccumulator {
+    private var previous: GPSFix?
+    private var anchor: GPSFix?
+    mutating func reset() { previous = nil; anchor = nil }
+    mutating func add(_ fix: GPSFix) -> (meters: Double, gap: Bool) {
+        defer { previous = fix }
+        guard let previous, let anchor else { self.anchor = fix; return (0, false) }
+        guard DistanceCalculator.segment(previous, fix) != nil else {
+            self.anchor = fix
+            return (0, true)
+        }
+        let displacement = DistanceCalculator.meters(anchor, fix)
+        let threshold = max(5, max(anchor.accuracy, fix.accuracy) * 0.75)
+        guard displacement >= threshold else { return (0, false) }
+        self.anchor = fix
+        return (displacement, false)
+    }
+}
+
+enum ReportPeriod: String, CaseIterable, Identifiable {
+    case month = "Month", year = "Year", all = "All dates", custom = "Custom"
+    var id: String { rawValue }
+}
+struct ReportSelection {
+    var period: ReportPeriod = .month
+    var anchor = Date()
+    var start = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
+    var end = Date()
+    var category: Category? = .business
+    var vehicleID: UUID?
+    var employer = false
+    var valid: Bool { period != .custom || Day.string(start) <= Day.string(end) }
+    func includes(_ trip: Trip) -> Bool {
+        let d = trip.details
+        guard trip.deletedAt == nil, valid,
+              category == nil || d.category == category,
+              vehicleID == nil || d.vehicleID == vehicleID else { return false }
+        switch period {
+        case .month: return d.day.hasPrefix(String(Day.string(anchor).prefix(7)))
+        case .year: return d.day.hasPrefix(String(Day.string(anchor).prefix(4)))
+        case .all: return true
+        case .custom: return d.day >= Day.string(start) && d.day <= Day.string(end)
+        }
+    }
+    var label: String {
+        switch period {
+        case .month: return anchor.formatted(.dateTime.month(.wide).year())
+        case .year: return String(Day.string(anchor).prefix(4))
+        case .all: return "All dates"
+        case .custom: return "\(Day.string(start)) – \(Day.string(end))"
+        }
+    }
+}

@@ -42,6 +42,7 @@ struct Trip: Record {
     var updatedAt = Date()
     var deletedAt: Date?
     var history: [TripEditEvent] = []
+    var sourceDraftID: UUID?
 }
 struct VehicleYear: Codable, Identifiable, Sendable {
     var id = UUID()
@@ -103,10 +104,26 @@ struct RecordingDraft: Record {
     var last: GPSFix?
     var interrupted = false
     var ended = false
+    var vehicleID: UUID?
+    var needsDuplicateReview: Bool?
+}
+struct RecordTombstone: Record {
+    var id = UUID()
+    var recordID: UUID
+    var kind: String
+    var updatedAt = Date()
+}
+struct LogPreferences: Record {
+    var id = UUID(uuidString: "B43818A8-C957-4F57-9882-3DC761162529")!
+    var updatedAt = Date()
+    var schemaVersion = 2
+    var hasCompletedWelcome = false
+    var defaultVehicleID: UUID?
+    var installedRateIDs: [UUID] = []
 }
 struct Backup: Codable, Sendable {
     var format = "MileLog"
-    var version = 1
+    var version = 2
     var exportedAt = Date()
     var trips: [Trip] = []
     var vehicles: [Vehicle] = []
@@ -115,6 +132,9 @@ struct Backup: Codable, Sendable {
     var frequentTrips: [FrequentTrip] = []
     var feedback: [FeedbackNote] = []
     var drafts: [RecordingDraft] = []
+    // Optional additions allow version-1 files and existing payloads to decode unchanged.
+    var tombstones: [RecordTombstone]?
+    var preferences: LogPreferences?
 }
 struct LogError: LocalizedError { var message: String; var errorDescription: String? { message }; init(_ message: String) { self.message = message } }
 
