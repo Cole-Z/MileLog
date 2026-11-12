@@ -101,7 +101,10 @@ struct TripEditor: View {
     @State private var geocodeMessage: String?
     @State private var geocoder = EndpointGeocoder()
     @State private var reviewedDuplicate = false
+    @State private var namingDestination = false
+    @State private var destinationName = ""
     @FocusState private var inputFocused: Bool
+    @FocusState private var locationFocus: LocationField?
     let draftID: UUID?
     let duplicateReview: Bool
     let onSave: () -> Void
@@ -127,6 +130,9 @@ struct TripEditor: View {
                     } else {
                         Label("Will save as incomplete", systemImage: "exclamationmark.circle").foregroundStyle(.orange)
                         Text(pending.joined(separator: " · ")).font(.caption)
+                        if needsDestinationName {
+                            destinationNameButton
+                        }
                     }
                     Text("Incomplete records stay visible in reports, with blank estimate amounts. Completeness does not establish tax eligibility.").font(.caption).foregroundStyle(.secondary)
                 }
@@ -141,7 +147,7 @@ struct TripEditor: View {
                 }
                 Section("Where did you go?") {
                     locationRow("Start location", field: .start)
-                    locationRow("Destination", field: .end)
+                    locationRow("Destination / business location", field: .end)
                     if model.details.start.latitude != nil || model.details.end.latitude != nil {
                         Button(geocoding ? "Looking up addresses…" : "Look up recorded endpoint addresses", systemImage: "mappin.and.ellipse") { lookupEndpoints() }.disabled(geocoding)
                         Text("Sends endpoint coordinates to Apple's geocoding service when tapped. Original coordinates stay unchanged; typing labels works offline.").font(.caption).foregroundStyle(.secondary)
@@ -264,7 +270,7 @@ struct TripEditor: View {
                         Button("Save") { if model.save(store: store, draftID: draftID) { onSave(); dismiss() } }
                             .bold().disabled(duplicateReview && !reviewedDuplicate)
                     }
-                    ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Done") { inputFocused = false } }
+                    ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Done") { inputFocused = false; locationFocus = nil } }
                 }
                 .interactiveDismissDisabled()
                 .confirmationDialog("Discard unsaved changes? Your GPS draft will remain available.", isPresented: $confirmCancel, titleVisibility: .visible) {
@@ -290,6 +296,7 @@ struct TripEditor: View {
         return RateLookup.amount(for: details, rates: store.data.rates)
     }
     private func lookupEndpoints() {
+        inputFocused = false; locationFocus = nil
         geocoding = true; geocodeMessage = nil
         let start = model.details.start, end = model.details.end
         Task { @MainActor in
@@ -303,20 +310,64 @@ struct TripEditor: View {
                     if !isStart && model.details.end == end { model.details.end.text = label }
                 } catch { failures += 1 }
             }
-            geocodeMessage = failures == 0 ? "Endpoint labels updated. GPS coordinates are unchanged." : "Some addresses are unavailable. Enter their labels manually; recorded coordinates are unchanged."
+            geocodeMessage = failures == 0 ? "Endpoint labels updated. Review them, then tap Save." : "Some addresses are unavailable. Tap Name destination in the banner or type a place name in the labeled field."
         }
     }
+    private var needsDestinationName: Bool {
+        model.details.end.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            (model.details.category == .business && Recordkeeping.isCoordinateLabel(model.details.end.text))
+    }
+    private var destinationNameButton: some View {
+        Button("Name destination", systemImage: "pencil") { presentDestinationName() }
+            .buttonStyle(.borderless).frame(minHeight: 44)
+            .alert("Name destination", isPresented: $namingDestination) {
+                TextField("Place name and street or city", text: $destinationName)
+                Button("Use name") { model.details.end.text = destinationName.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .disabled(destinationName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || Recordkeeping.isCoordinateLabel(destinationName))
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Describe where you went. For a return trip, include the business stop and where you ended. Your GPS coordinates and miles stay unchanged. Then tap Save on the trip.")
+            }
+    }
+    private func presentDestinationName() {
+        inputFocused = false; locationFocus = nil
+        destinationName = Recordkeeping.isCoordinateLabel(model.details.end.text) ? "" : model.details.end.text
+        namingDestination = true
+    }
     private func locationRow(_ title: String, field: LocationField) -> some View {
-        HStack {
-            TextField(title, text: Binding(get: { field == .start ? model.details.start.text : model.details.end.text }, set: { text in
-                if field == .start {
-                    if model.details.method == .gps { model.details.start.text = text } else { model.details.start = Place(text: text) }
-                } else {
-                    if model.details.method == .gps { model.details.end.text = text } else { model.details.end = Place(text: text) }
+        let place = field == .start ? model.details.start : model.details.end
+        let coordinateLabel = Recordkeeping.isCoordinateLabel(place.text)
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.subheadline.weight(.medium))
+            HStack(alignment: .top) {
+                TextField("Type a place name or address", text: Binding(get: {
+                    let text = field == .start ? model.details.start.text : model.details.end.text
+                    return Recordkeeping.isCoordinateLabel(text) ? "" : text
+                }, set: { text in
+                    if field == .start {
+                        if model.details.method == .gps { model.details.start.text = text } else { model.details.start = Place(text: text) }
+                    } else {
+                        if model.details.method == .gps { model.details.end.text = text } else { model.details.end = Place(text: text) }
+                    }
+                }), axis: .vertical)
+                    .textFieldStyle(.roundedBorder).frame(minHeight: 44)
+                    .focused($locationFocus, equals: field)
+                    .accessibilityLabel(title)
+                    .accessibilityHint(model.details.method == .gps ? "Enter a place name or address. Recorded GPS coordinates are retained." : "Enter a place name or address.")
+                Button { inputFocused = false; locationFocus = nil; lookup = field } label: {
+                    Image(systemName: "magnifyingglass").frame(minWidth: 44, minHeight: 44)
                 }
-            })).focused($inputFocused)
-            Button { inputFocused = false; lookup = field } label: { Image(systemName: "magnifyingglass").frame(minWidth: 44, minHeight: 44) }
-                .accessibilityLabel("Look up \(title)")
+                .buttonStyle(.borderless).accessibilityLabel("Look up \(title)")
+            }
+            if coordinateLabel {
+                Text(field == .end && model.details.category == .business ? "Add the destination's name to complete this business record." : "A GPS location is recorded. You can add a name for easier reading.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let latitude = place.latitude, let longitude = place.longitude {
+                DisclosureGroup("Location coordinates") {
+                    Text("\(CSVExporter.precise(latitude)), \(CSVExporter.precise(longitude))").font(.caption).textSelection(.enabled)
+                }.font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
     private var recentPlaces: [Place] {
