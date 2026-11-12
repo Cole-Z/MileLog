@@ -1,5 +1,7 @@
 # MVP validation — November 11, 2026
 
+Historical prototype results below. For build 3 and the November 12 quality work, use [the current validation report](QUALITY_DELIVERY.md): 24 tests and unsigned iPhone build passed; physical-device checks remain pending.
+
 - **Passed:** unsigned iPhone device build, Xcode 26.3, iPhoneOS 26.2 SDK, deployment target iOS 17.0, Swift 6 language mode.
 - **Passed:** 11 Swift Testing tests in three suites on macOS. Coverage includes known distance, stale/poor fixes, impossible motion, stationary drift, inclusive midyear rates, missing rates, employer rates, Decimal rounding, round trips, totals exclusions, yearly odometer denominator, trip validation, CSV escaping/formula protection, JSON round-trip and merge, malformed data and conflicting rates.
 - **Passed:** project and Info.plist syntax validation.

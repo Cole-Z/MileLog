@@ -40,7 +40,7 @@ No sign-in, subscription, or purchase is required. To exercise the main flow wit
 
 Location permission is requested only after Start trip. While Using permission with Precise Location is sufficient. The location background mode supports a user-started trip through screen lock and navigation use; recording stops when paused/ended. There is no automatic drive detection and no Always-location request. Without location access, manual entry remains available.
 
-Privacy policy and Help & support are available in Settings. The app stores its log locally. Optional Apple Maps lookup sends the entered search to Apple; backup/export uses the system share sheet.
+Privacy policy and Help & support are available in Settings. The app stores its log locally. Optional Apple Maps search sends entered text to Apple; user-requested endpoint address lookup sends recorded endpoint coordinates to Apple's geocoding service. It does not run automatically. CSV/PDF reports and backups use the system share sheet.
 
 ## Screenshot capture on the owner's iPhone
 
