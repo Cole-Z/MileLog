@@ -80,8 +80,16 @@ struct AnnualVehicleSummary {
     let periodMiles: Double?
     let annualMiles: Double?
     let note: String
+    let beginningOdometer: Double?
+    let endingOdometer: Double?
+    let beginningDay: String?
+    let endingDay: String?
     init(vehicle: Vehicle, year: Int, trips: [Trip], today: String = Day.string(Date())) {
         vehicleID = vehicle.id; vehicleName = vehicle.name; self.year = year
+        let readings = vehicle.years.first { $0.year == year }
+        beginningOdometer = readings?.startRecorded == true ? readings?.start : nil
+        endingOdometer = readings?.end
+        beginningDay = readings?.startDay; endingDay = readings?.endDay
         let matching = trips.filter { $0.deletedAt == nil && $0.details.vehicleID == vehicle.id && $0.details.day.hasPrefix("\(year)-") && $0.details.category == .business }
         businessMiles = matching.reduce(0) { $0 + $1.details.totalMiles }
         incompleteTrips = matching.filter { !Recordkeeping.isComplete($0.details) }.count

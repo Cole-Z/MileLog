@@ -15,7 +15,18 @@ extension View { func errorAlert(_ text: Binding<String?>) -> some View { modifi
 struct ShareFile: Identifiable { let id = UUID(); let url: URL }
 struct ShareSheet: UIViewControllerRepresentable {
     let url: URL
-    func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: [url], applicationActivities: nil) }
+    var onError: (String) -> Void = { _ in }
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        makeController()
+    }
+    func makeController() -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        controller.completionWithItemsHandler = { _, _, _, error in
+            // Cancellation is a normal completion. Keep the file available for retry.
+            if let error { onError("Sharing could not finish. Try sharing again. \(error.localizedDescription)") }
+        }
+        return controller
+    }
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 struct PlaceSearchView: View {

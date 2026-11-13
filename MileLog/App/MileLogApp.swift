@@ -56,6 +56,12 @@ private struct StartupView: View {
                 }.padding(32).frame(maxWidth: .infinity, minHeight: geometry.size.height)
             }
         }.background(Color.mileInk.ignoresSafeArea())
+            .onChange(of: showProgress) { _, visible in if visible { announceStage() } }
+            .onChange(of: stage) { _, _ in announceStage() }
+    }
+    private func announceStage() {
+        guard showProgress, scenePhase == .active, UIAccessibility.isVoiceOverRunning else { return }
+        UIAccessibility.post(notification: .announcement, argument: stage.message)
     }
 }
 struct RootView: View {

@@ -49,6 +49,7 @@ import UIKit
                 for annual in report.annual {
                     text("\(annual.vehicleName) · \(annual.year)", bold: true)
                     text("Business miles logged: \(CSVExporter.precise(annual.businessMiles)) · Incomplete business records: \(annual.incompleteTrips)")
+                    text("Beginning odometer: \(annual.beginningOdometer.map(CSVExporter.precise) ?? "Missing or unconfirmed") [\(annual.beginningDay ?? "Date missing")] · Ending: \(annual.endingOdometer.map(CSVExporter.precise) ?? "Missing") [\(annual.endingDay ?? "Date missing")]")
                     text("Annual mileage: \(annual.annualMiles.map(CSVExporter.precise) ?? "Unavailable") · Recorded period mileage: \(annual.periodMiles.map(CSVExporter.precise) ?? "Unavailable")")
                     if let percent = annual.businessPercent { text("Recorded business use: \(percent.formatted(.number.precision(.fractionLength(1))))%") }
                     text(annual.note, size: 9)
@@ -66,6 +67,11 @@ import UIKit
                 text("\(d.start.text.isEmpty ? "Origin missing" : d.start.text) → \(d.end.text.isEmpty ? "Destination missing" : d.end.text)")
                 text("Purpose: \(d.purpose.isEmpty ? "Not supplied" : d.purpose)")
                 text("Miles used: \(CSVExporter.precise(d.totalMiles)) · Original GPS miles: \(t.gpsEvidence.map { CSVExporter.precise($0.meters / DistanceCalculator.metersPerMile) } ?? "Unavailable")")
+                if let original = t.originalDetails { text("Originally recorded miles: \(CSVExporter.precise(original.totalMiles))", size: 9) }
+                text("Endpoint coordinates: \(coordinates(d.start)) → \(coordinates(d.end))", size: 9)
+                if let evidence = t.gpsEvidence {
+                    text("Original GPS coordinates: \(evidence.first.map { coordinates($0.place) } ?? "Unavailable") → \(evidence.last.map { coordinates($0.place) } ?? "Unavailable")", size: 9)
+                }
                 text("Rate: \(row.rate.map { "$" + CSVExporter.decimal($0.cents / 100) + "/mi" } ?? "Missing") · Estimate: \(row.amount?.money ?? "Not calculated")")
                 text("Parking: \(d.parking.money) \(d.parkingDescription ?? "") · Tolls: \(d.tolls.money) \(d.tollsDescription ?? "")")
                 text("Start: \(d.startedAt.map { iso.string(from: $0) } ?? "Not recorded") [\(d.startTimeZoneID ?? "Zone unknown")] · End: \(d.endedAt.map { iso.string(from: $0) } ?? "Not recorded") [\(d.endTimeZoneID ?? "Zone unknown")]")
@@ -81,6 +87,10 @@ import UIKit
             text("Keep supporting documents and external backups. Deleting the app can remove local records and recovery files. This report is not IRS approval, proof of accuracy, or a determination of deductibility.", size: 9)
             text("IRS Publication 463: https://www.irs.gov/publications/p463\nMileage rates: https://www.irs.gov/tax-professionals/standard-mileage-rates", size: 8)
         }
+    }
+    private static func coordinates(_ place: Place) -> String {
+        guard let latitude = place.latitude, let longitude = place.longitude else { return "Not recorded" }
+        return "\(CSVExporter.precise(latitude)), \(CSVExporter.precise(longitude))"
     }
     /// Wrap by words and split oversized tokens, so long notes cannot overflow a page.
     nonisolated private static func wrappedLines(_ value: String, font: UIFont, width: CGFloat) -> [String] {

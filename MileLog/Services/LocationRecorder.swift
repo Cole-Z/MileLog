@@ -3,7 +3,7 @@ import Observation
 import UIKit
 
 @MainActor @Observable final class LocationRecorder: NSObject, @preconcurrency CLLocationManagerDelegate {
-    private let manager = CLLocationManager()
+    private let manager: CLLocationManager
     private let store: LogStore
     private var accumulator = DistanceAccumulator()
     private var pendingStart = false
@@ -14,8 +14,9 @@ import UIKit
     var status = "Ready when you are"
     var error: String?
 
-    init(store: LogStore) {
+    init(store: LogStore, manager: CLLocationManager = CLLocationManager()) {
         self.store = store
+        self.manager = manager
         draft = store.data.drafts.sorted { $0.createdAt < $1.createdAt }.first
         super.init()
         manager.delegate = self
@@ -124,6 +125,14 @@ import UIKit
         catch { self.error = error.localizedDescription }
     }
     func details() -> TripDetails { draft?.recordedDetails ?? TripDetails() }
+    func displayStatus(at now: Date) -> String {
+        guard recording else { return status }
+        let lastInSegment = draft?.last?.timestamp ?? recordingSegmentStartedAt
+        if now.timeIntervalSince(max(lastInSegment, recordingSegmentStartedAt)) > 30 {
+            return "Recovering GPS — distance may be missing"
+        }
+        return status
+    }
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         if pendingStart && (manager.authorizationStatus == .authorizedWhenInUse || manager.authorizationStatus == .authorizedAlways) { begin() }
         else if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted {
@@ -144,7 +153,7 @@ import UIKit
                 value.rejectedFixes = (value.rejectedFixes ?? 0) + 1
                 value.interrupted = true
                 value.interruptionReasons = Array(Set((value.interruptionReasons ?? []) + ["Rejected inaccurate, stale, or future sample"]))
-                status = "Weak location signal — waiting for accuracy"
+                status = "Low location accuracy — waiting for a reliable signal"
                 continue
             }
             let segment = accumulator.add(fix)
@@ -164,17 +173,18 @@ import UIKit
         }
         value.updatedAt = Date()
         draft = value
-        // At most five seconds of delivered fixes can be uncheckpointed on termination.
+        // Checkpoint on delivered callbacks, not a guaranteed wall-clock timer.
         if Date().timeIntervalSince(checkpointAt) >= 5 { _ = persist(value) }
     }
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        guard recording else { return } // Ignore callbacks arriving after Pause/End.
         if let error = error as? CLError, error.code == .locationUnknown {
             if var value = draft, recording {
                 value.interrupted = true; value.updatedAt = Date()
                 value.interruptionReasons = Array(Set((value.interruptionReasons ?? []) + ["Location unavailable"]))
                 guard persist(value) else { return }
             }
-            status = "Location unavailable — waiting for signal"
+            status = "Recovering GPS — waiting for signal"
             return
         }
         pause(); self.error = error.localizedDescription

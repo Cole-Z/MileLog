@@ -54,7 +54,7 @@ struct SettingsView: View {
                     Text("Removes trips, vehicles, history, recordings, and local backups. Exported copies in other apps or device backups are separate.")
                 }
             }.navigationTitle("Settings")
-                .sheet(item: $file) { ShareSheet(url: $0.url) }
+                .sheet(item: $file) { ShareSheet(url: $0.url) { message = $0 } }
                 .sheet(isPresented: $feedback) { NavigationStack { FeedbackView() } }
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
                     do {
@@ -165,7 +165,7 @@ struct RecoveryFilesView: View {
                 }.swipeActions { Button("Delete", role: .destructive) { deleting = url } }
             }
         }.navigationTitle("Recovery copies").task { load() }
-            .sheet(item: $share) { ShareSheet(url: $0.url) }
+            .sheet(item: $share) { ShareSheet(url: $0.url) { error = $0 } }
             .confirmationDialog("Delete this local backup file? The current log is unchanged.", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
                 Button("Delete copy", role: .destructive) {
                     do { if let deleting { try FileManager.default.removeItem(at: deleting) }; deleting = nil; load() }

@@ -143,10 +143,7 @@ struct TripsView: View {
                     .font(.system(.largeTitle, design: .rounded, weight: .bold)).monospacedDigit()
                 TimelineView(.periodic(from: .now, by: 5)) { context in
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(recorder.status).font(.subheadline)
-                        if recorder.recording, let last = draft.last, context.date.timeIntervalSince(last.timestamp) > 30 {
-                            Label("No recent location. Distance may be missing.", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(Color.mileMint)
-                        }
+                        Text(recorder.displayStatus(at: context.date)).font(.subheadline)
                     }
                 }
                 if draft.interrupted { Label("Check for missing miles before saving", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(Color.mileMint) }
@@ -316,7 +313,7 @@ struct ReportsView: View {
                     Text("Includes the selected trips, original/adjusted mileage, times, locations, purposes, expenses, rate periods, and completeness warnings. Currency is rounded per trip to cents; summaries sum those same amounts.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-            }.navigationTitle("Reports").sheet(item: $file) { ShareSheet(url: $0.url) }.errorAlert($error)
+            }.navigationTitle("Reports").sheet(item: $file) { ShareSheet(url: $0.url) { error = $0 } }.errorAlert($error)
         }
     }
     private func exportPDF() {
