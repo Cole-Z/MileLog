@@ -16,6 +16,19 @@ private func saved(_ d: TripDetails) -> Trip {
 }
 
 struct QualityRateTests {
+    @MainActor @Test func bundledRatesMatchPublishedPeriods() throws {
+        let store = try LogStore(inMemory: true)
+        for (day, business, medical) in [("2025-12-31", Decimal(70), Decimal(21)), ("2026-01-01", Decimal(string: "72.5")!, Decimal(string: "20.5")!), ("2026-06-30", Decimal(string: "72.5")!, Decimal(string: "20.5")!), ("2026-07-01", Decimal(76), Decimal(string: "23.5")!), ("2026-12-31", Decimal(76), Decimal(string: "23.5")!)] {
+            var details = entry(1, day: day)
+            #expect(RateLookup.rate(for: details, rates: store.data.rates)?.cents == business)
+            for category in [Category.medical, .moving] {
+                details.category = category
+                #expect(RateLookup.rate(for: details, rates: store.data.rates)?.cents == medical)
+            }
+            details.category = .charitable
+            #expect(RateLookup.rate(for: details, rates: store.data.rates)?.cents == 14)
+        }
+    }
     @Test(arguments: [("2025-12-31", "0.70"), ("2026-06-30", "0.73"), ("2026-07-01", "0.76"), ("2026-12-31", "0.76")])
     func boundaries(_ example: (String, String)) {
         #expect(RateLookup.amount(for: entry(1, day: example.0), rates: rates) == Decimal(string: example.1))
@@ -100,6 +113,27 @@ struct QualityGPSTests {
 }
 
 struct QualityPersistenceTests {
+    @Test func csvAnnualReadingsRemainExplicitAndIncompleteTotalsStayBlank() throws {
+        var vehicle = Vehicle(name: "Work car")
+        vehicle.years = [VehicleYear(year: 2025, start: 1000, end: 11000)]
+        var details = entry(10, day: "2025-06-01"); details.vehicleID = vehicle.id
+        var backup = Backup(); backup.vehicles = [vehicle]; backup.trips = [saved(details)]
+        func field(_ name: String, in backup: Backup) throws -> String {
+            let rows = parseCSV(CSVExporter.export(backup))
+            let index = try #require(rows[0].firstIndex(of: name))
+            return rows[1][index]
+        }
+        #expect(try field("Annual Vehicle Miles", in: backup).isEmpty)
+        #expect(try field("Annual Beginning Odometer", in: backup).isEmpty)
+        #expect(try field("Annual Mileage Status", in: backup).contains("unconfirmed"))
+        backup.vehicles[0].years[0].startRecorded = true
+        backup.vehicles[0].years[0].startDay = "2025-01-01"
+        backup.vehicles[0].years[0].endDay = "2025-12-31"
+        backup.vehicles[0].years[0].fullYearConfirmed = true
+        #expect(try field("Annual Vehicle Miles", in: backup) == "10000.0")
+        #expect(try field("Annual Beginning Odometer", in: backup) == "1000.0")
+        #expect(try field("Annual Ending Date", in: backup) == "2025-12-31")
+    }
     @Test func oldBackupsAndUnknownVersions() throws {
         var b = Backup(); b.version = 1; b.rates = rates; b.trips = [saved(entry())]
         let legacy = JSONEncoder(); legacy.dateEncodingStrategy = .iso8601

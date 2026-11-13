@@ -170,7 +170,7 @@ struct TripEditor: View {
                 Section {
                     LabeledContent(model.details.roundTrip ? "One-way miles" : "Miles driven") {
                         TextField("0.0", text: $model.miles).keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing).focused($inputFocused).accessibilityLabel("Miles driven")
+                            .multilineTextAlignment(.trailing).focused($inputFocused).accessibilityIdentifier("tripMiles")
                     }
                     if model.details.method == .manual { Toggle("Round trip", isOn: $model.details.roundTrip) }
                     if let preview = model.previewDetails {
