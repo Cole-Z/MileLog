@@ -164,6 +164,11 @@ extension ReportSelection {
     }
 }
 extension Trip {
+    var displayTitle: String {
+        let destination = details.end.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return destination.isEmpty || Recordkeeping.isCoordinateLabel(destination)
+            ? (details.purpose.isEmpty ? "Destination needs a label" : details.purpose) : destination
+    }
     func matchesSearch(_ query: String) -> Bool {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return query.isEmpty || [details.start.text, details.end.text, details.purpose, details.notes].contains { $0.localizedCaseInsensitiveContains(query) }

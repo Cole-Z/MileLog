@@ -17,16 +17,26 @@ struct TripsView: View {
     @State private var search = ""
     @State private var filters = ReportSelection(period: .all, category: nil)
     @State private var showFilters = false
+    @State private var needsReviewOnly = false
+    @State private var tripSaved = false
 
     private var filteredTrips: [Trip] {
         store.trips.filter { trip in
-            filters.includes(trip) && trip.matchesSearch(search)
+            filters.includes(trip) && trip.matchesSearch(search) && (!needsReviewOnly || !Recordkeeping.isComplete(trip.details))
         }
     }
-    private var groups: [String: [Trip]] { Dictionary(grouping: filteredTrips, by: { $0.details.day }) }
     var body: some View {
+        let filteredTrips = filteredTrips
+        let groups = Dictionary(grouping: filteredTrips, by: { $0.details.day })
         NavigationStack {
             List {
+                if tripSaved {
+                    Section {
+                        Label("Trip saved", systemImage: "checkmark.circle.fill").foregroundStyle(Color.mileAccent)
+                            .accessibilityAddTraits(.isStaticText)
+                        Button("Dismiss confirmation") { tripSaved = false }
+                    }
+                }
                 Section {
                     recordingCard
                         .listRowInsets(EdgeInsets())
@@ -52,6 +62,12 @@ struct TripsView: View {
                         }
                     }
                 }
+                if !store.trips.isEmpty {
+                    Section {
+                        Toggle(isOn: $needsReviewOnly) { Label("Needs review", systemImage: "exclamationmark.circle") }
+                            .accessibilityHint("Shows incomplete trips within your current search and filters.")
+                    }
+                }
                 if filteredTrips.isEmpty {
                     Section {
                         if store.trips.isEmpty {
@@ -63,8 +79,8 @@ struct TripsView: View {
                         } else {
                             ContentUnavailableView {
                                 Label("No matching trips", systemImage: "line.3.horizontal.decrease.circle")
-                            } description: { Text("Try different dates, a different vehicle, or another search.")
-                            } actions: { Button("Clear filters") { filters = ReportSelection(period: .all, category: nil); search = "" } }
+                            } description: { Text(needsReviewOnly ? "No trips need review within these filters." : "Try different dates, a different vehicle, or another search.")
+                            } actions: { Button("Clear filters") { filters = ReportSelection(period: .all, category: nil); search = ""; needsReviewOnly = false } }
                         }
                     }
                 } else {
@@ -98,6 +114,8 @@ struct TripsView: View {
             .sheet(item: $editor) { presentation in
                 TripEditor(original: presentation.original, initial: presentation.details, draftID: presentation.draftID, duplicateReview: presentation.duplicateReview) {
                     if presentation.draftID != nil { recorder.refresh() }
+                    tripSaved = true
+                    UIAccessibility.post(notification: .announcement, argument: "Trip saved")
                 }
             }
             .sheet(isPresented: $showFilters) {
@@ -176,14 +194,14 @@ struct TripsView: View {
     private func tripRow(_ trip: Trip) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .firstTextBaseline) {
-                Text(Recordkeeping.isCoordinateLabel(trip.details.end.text) || trip.details.end.text.isEmpty ? (trip.details.purpose.isEmpty ? "Destination needs a label" : trip.details.purpose) : trip.details.end.text).font(.headline).foregroundStyle(.primary)
+                Text(trip.displayTitle).font(.headline).foregroundStyle(.primary)
                 Spacer(minLength: 12)
                 Text("\(trip.details.totalMiles.formatted(.number.precision(.fractionLength(1)))) mi")
                     .font(.headline).monospacedDigit().foregroundStyle(.primary)
             }
             Text(Recordkeeping.isCoordinateLabel(trip.details.start.text) ? "Origin coordinates in trip details" : "From \(trip.details.start.text)").font(.caption).foregroundStyle(.secondary).lineLimit(2)
             if !trip.details.purpose.isEmpty { Text(trip.details.purpose).font(.subheadline).foregroundStyle(.secondary) }
-            if !Recordkeeping.isComplete(trip.details) { Label("Incomplete record", systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange) }
+            if !Recordkeeping.isComplete(trip.details) { Label("Needs review", systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange) }
             if trip.details.correctionReason != nil { Label(trip.gpsEvidence == nil ? "Corrected · see edit history" : "Corrected · original evidence retained", systemImage: "pencil").font(.caption).foregroundStyle(.secondary) }
             HStack(spacing: 8) {
                 Text(trip.details.category.rawValue).font(.caption.weight(.medium)).foregroundStyle(Color.mileAccent)
@@ -254,7 +272,12 @@ struct ReportsView: View {
                 }
                 Section {
                     LabeledContent("Trips", value: String(trips.count))
-                    if report.incomplete > 0 { Label("\(Recordkeeping.plural(report.incomplete, "incomplete record")): retained in exports with blank estimate amounts.", systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+                    if report.incomplete > 0 {
+                        NavigationLink { ReviewTripsView(selection: store.report) } label: {
+                            Label("Needs review · \(Recordkeeping.plural(report.incomplete, "trip"))", systemImage: "exclamationmark.circle").foregroundStyle(.orange)
+                        }
+                        Text("Incomplete records stay in exports with blank estimate amounts. Tap Needs review to add missing details.").font(.caption).foregroundStyle(.secondary)
+                    }
                     if report.unassignedVehicles > 0 { Text("\(Recordkeeping.plural(report.unassignedVehicles, "trip")) without an assigned vehicle: excluded from vehicle annual summaries.").font(.caption).foregroundStyle(.orange) }
                     LabeledContent("Logged miles", value: trips.reduce(0) { $0 + $1.details.totalMiles }.formatted(.number.precision(.fractionLength(1))))
                     LabeledContent("Business miles", value: totals.businessMiles.formatted(.number.precision(.fractionLength(1))))
@@ -307,6 +330,30 @@ struct ReportsView: View {
             let csv = CSVExporter.export(store.data, employer: store.report.employer, selected: store.reportTrips)
             file = ShareFile(url: try store.writeFile(Data(csv.utf8), name: "MileLog-\(store.report.employer ? "employer" : "mileage")-\(Day.string(Date()))-\(UUID().uuidString.prefix(6)).csv"))
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+private struct ReviewTripsView: View {
+    @Environment(LogStore.self) private var store
+    @State private var editing: Trip?
+    let selection: ReportSelection
+    var body: some View {
+        let trips = store.trips.filter { selection.includes($0) && !Recordkeeping.isComplete($0.details) }
+        List {
+            if trips.isEmpty {
+                ContentUnavailableView("Review complete", systemImage: "checkmark.circle", description: Text("Required trip details are supplied for this report. Annual records and tax eligibility need separate review."))
+            }
+            ForEach(trips) { trip in
+                Button { editing = trip } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(trip.displayTitle).font(.headline).foregroundStyle(.primary)
+                        Text(Day.date(trip.details.day)?.formatted(date: .abbreviated, time: .omitted) ?? trip.details.day).font(.caption).foregroundStyle(.secondary)
+                        Text(Recordkeeping.issues(trip.details).joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary)
+                    }.frame(minHeight: 44).accessibilityElement(children: .combine)
+                }
+            }
+        }.navigationTitle("Needs review")
+            .sheet(item: $editing) { TripEditor(original: $0) }
     }
 }
 #Preview("Trips") { let s = PreviewData.store(); TripsView().environment(s).environment(LocationRecorder(store: s)) }

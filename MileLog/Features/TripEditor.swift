@@ -103,6 +103,7 @@ struct TripEditor: View {
     @State private var reviewedDuplicate = false
     @State private var namingDestination = false
     @State private var destinationName = ""
+    @State private var correctionsExpanded = false
     @FocusState private var inputFocused: Bool
     @FocusState private var locationFocus: LocationField?
     let draftID: UUID?
@@ -128,13 +129,15 @@ struct TripEditor: View {
                     if pending.isEmpty {
                         Label("Required details supplied", systemImage: "checkmark.circle").foregroundStyle(Color.mileAccent)
                     } else {
-                        Label("Will save as incomplete", systemImage: "exclamationmark.circle").foregroundStyle(.orange)
+                        Label("Needs review", systemImage: "exclamationmark.circle").foregroundStyle(.orange)
                         Text(pending.joined(separator: " · ")).font(.caption)
                         if needsDestinationName {
                             destinationNameButton
                         }
                     }
-                    Text("Incomplete records stay visible in reports, with blank estimate amounts. Completeness does not establish tax eligibility.").font(.caption).foregroundStyle(.secondary)
+                    if !pending.isEmpty {
+                        Text("You can save now and finish later. Incomplete records stay visible in reports with blank estimate amounts.").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Section("Trip details") {
                     DatePicker("Date", selection: Binding(get: { Day.date(model.details.day) ?? Date() }, set: { model.details.day = Day.string($0) }), displayedComponents: .date)
@@ -192,16 +195,24 @@ struct TripEditor: View {
                     if model.details.category == .business { Text("Be specific, such as “Client meeting at Acme” or “Materials for the Oak Street job.”") }
                 }
                 if model.details.method == .gps || model.original?.gpsEvidence != nil {
-                    Section("Original recording & corrections") {
-                        if let evidence = model.original?.gpsEvidence {
+                    Section {
+                        DisclosureGroup("Original GPS measurements") {
+                        if let evidence = originalEvidence {
                             LabeledContent("Original GPS miles", value: CSVExporter.precise(evidence.meters / DistanceCalculator.metersPerMile))
                             LabeledContent("Original meters", value: CSVExporter.precise(evidence.meters))
                             Text("Original endpoints: \(evidence.first?.place.text ?? "Unavailable") → \(evidence.last?.place.text ?? "Unavailable")").font(.caption)
                             Text("Original start: \(evidence.startedAt.formatted()) [\(evidence.startTimeZoneID ?? "Zone unknown")]").font(.caption)
                             Text("Original end: \(evidence.endedAt?.formatted() ?? "Not recorded") [\(evidence.endTimeZoneID ?? "Zone unknown")]").font(.caption)
                             if evidence.interrupted { Label("Recording had gaps; verify the distance", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange) }
+                            ForEach(evidence.interruptionReasons ?? [], id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary) }
+                            LabeledContent("Accepted fixes", value: evidence.acceptedFixes.map(String.init) ?? "Unknown")
+                            LabeledContent("Rejected fixes", value: evidence.rejectedFixes.map(String.init) ?? "Unknown")
                         } else if model.original != nil { Text("Original GPS evidence was not separately stored by the earlier app version.").font(.caption) }
+                        }
+                        DisclosureGroup("Correction reason", isExpanded: $correctionsExpanded) {
                         TextField("Reason for correcting distance, coordinates, or times", text: optionalText(\.correctionReason), axis: .vertical).focused($inputFocused)
+                        Text("Original measurements and previous corrections remain in the record history.").font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 Section("Optional details") {
@@ -227,11 +238,13 @@ struct TripEditor: View {
                         Button("Use odometer difference as total miles") { model.useOdometers() }
                         Text("This uses the full distance driven and turns off round-trip doubling.").font(.caption).foregroundStyle(.secondary)
                     }
-                    DisclosureGroup("Parking, tolls & notes") {
+                    DisclosureGroup("Parking & tolls") {
                         LabeledContent("Parking ($)") { TextField("0", text: $model.parking).keyboardType(.decimalPad).multilineTextAlignment(.trailing).focused($inputFocused).accessibilityLabel("Parking dollars") }
                         LabeledContent("Tolls ($)") { TextField("0", text: $model.tolls).keyboardType(.decimalPad).multilineTextAlignment(.trailing).focused($inputFocused).accessibilityLabel("Toll dollars") }
                         TextField("Parking description", text: optionalText(\.parkingDescription)).focused($inputFocused)
                         TextField("Toll description", text: optionalText(\.tollsDescription)).focused($inputFocused)
+                    }
+                    DisclosureGroup("Notes & supporting records") {
                         TextField("Receipt/reference note (optional)", text: optionalText(\.evidenceReference)).focused($inputFocused)
                         TextField("Notes", text: $model.details.notes, axis: .vertical).focused($inputFocused)
                     }
@@ -243,10 +256,12 @@ struct TripEditor: View {
                 }
                 if let original = model.original {
                     Section {
+                        DisclosureGroup("Saved rates") {
                         Toggle("Refresh this trip's saved rates", isOn: $model.refreshRates)
                         Text("Saved rate snapshots keep estimates stable when the rate table changes. Refreshing, or changing the trip date/category, uses the matching current table and records an edit.").font(.caption).foregroundStyle(.secondary)
                         if let note = original.rateCaptureNote { Text(note).font(.caption).foregroundStyle(.secondary) }
-                        DisclosureGroup("Record history · \(original.history.count) events") {
+                        }
+                        DisclosureGroup("Record history · \(Recordkeeping.plural(original.history.count, "event"))") {
                             LabeledContent("Created", value: original.createdAt.formatted())
                             LabeledContent("Last edited", value: original.updatedAt.formatted())
                             ForEach(original.history.reversed()) { event in
@@ -277,6 +292,8 @@ struct TripEditor: View {
                     Button("Discard changes", role: .destructive) { dismiss() }
                 }
                 .errorAlert($model.error)
+                .onChange(of: model.miles) { _, _ in if originalEvidence != nil { correctionsExpanded = true } }
+                .onChange(of: model.error) { _, error in if error != nil && originalEvidence != nil { correctionsExpanded = true } }
                 .sheet(isPresented: $addVehicle) { VehicleEditor(vehicle: Vehicle()) { vehicle in model.details.vehicleID = vehicle.id } }
                 .sheet(item: $lookup) { field in
                     PlaceSearchView(initial: field == .start ? model.details.start.text : model.details.end.text) { place in
@@ -284,6 +301,9 @@ struct TripEditor: View {
                     }
                 }
         }
+    }
+    private var originalEvidence: GPSRecordingEvidence? {
+        model.original?.gpsEvidence ?? draftID.flatMap { id in store.data.drafts.first { $0.id == id }.map(GPSRecordingEvidence.init) }
     }
     private func optionalText(_ path: WritableKeyPath<TripDetails, String?>) -> Binding<String> {
         Binding(get: { model.details[keyPath: path] ?? "" }, set: { model.details[keyPath: path] = $0.isEmpty ? nil : $0 })
