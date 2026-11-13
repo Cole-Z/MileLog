@@ -12,7 +12,7 @@
 <key>NSLocationWhenInUseUsageDescription</key><string>MileLog measures mileage for trips you start. Recording continues while your phone is locked or you use another app, until you pause or end the trip. Your trip log is stored on this device.</string>
 <key>UIBackgroundModes</key><array><string>location</string></array>
 <key>ITSAppUsesNonExemptEncryption</key><false/>
-<key>UILaunchScreen</key><dict/>
+<key>UILaunchStoryboardName</key><string>LaunchScreen</string>
 <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
 <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
 <key>UIFileSharingEnabled</key><true/>

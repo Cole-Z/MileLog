@@ -1,31 +1,61 @@
 import SwiftUI
 
 @main struct MileLogApp: App {
-    @State private var store: LogStore?
-    @State private var recorder: LocationRecorder?
-    @State private var startupError: String?
+    @State private var startup = StartupController()
     var body: some Scene {
         WindowGroup {
             Group {
-                if let store, let recorder { RootView().environment(store).environment(recorder) }
-                else if let startupError {
+                if let store = startup.store { LoadedAppView(store: store).onAppear { startup.recordReady() } }
+                else if let startupError = startup.error {
                     ContentUnavailableView {
                         Label("Your log could not open", systemImage: "externaldrive.badge.exclamationmark")
                     } description: {
                         Text("\(startupError)\n\nYour data has not been erased. Keep MileLog installed and contact support for help.")
                     } actions: {
-                        Button("Retry") { open() }
+                        Button("Retry") { startup.start() }.buttonStyle(.borderedProminent)
                         Link("Contact support", destination: ReleaseInfo.supportURL)
                     }
-                } else { ProgressView("Opening your mileage log…") }
-            }.task { if store == nil { open() } }.tint(Color.mileAccent)
+                } else { StartupView(stage: startup.stage, showProgress: startup.showProgress) }
+            }.task { startup.start() }.tint(Color.mileAccent)
         }
     }
-    private func open() {
-        do {
-            let loaded = try LogStore()
-            store = loaded; recorder = LocationRecorder(store: loaded); startupError = nil
-        } catch { startupError = error.localizedDescription }
+}
+
+private struct LoadedAppView: View {
+    let store: LogStore
+    @State private var recorder: LocationRecorder
+    init(store: LogStore) {
+        self.store = store
+        _recorder = State(initialValue: LocationRecorder(store: store))
+    }
+    var body: some View { RootView().environment(store).environment(recorder) }
+}
+
+private struct StartupView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    let stage: StartupStage
+    let showProgress: Bool
+    var body: some View {
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 18) {
+                    Image(systemName: "car.side.fill").font(.largeTitle).foregroundStyle(Color.mileMint).accessibilityHidden(true)
+                    Text("MileLog").font(.largeTitle.bold()).foregroundStyle(.white).accessibilityAddTraits(.isHeader)
+                    TimelineView(.animation(minimumInterval: 1 / 30, paused: !showProgress || reduceMotion || scenePhase != .active)) { timeline in
+                        let position = showProgress && !reduceMotion && scenePhase == .active ? (sin(timeline.date.timeIntervalSinceReferenceDate * 2) + 1) / 2 : 0.5
+                        Capsule().fill(Color.mileMint.opacity(0.25)).frame(width: 160, height: 4)
+                            .overlay(alignment: .leading) {
+                                Capsule().fill(Color.mileMint).frame(width: 40, height: 4).offset(x: position * 120)
+                            }
+                    }.accessibilityHidden(true)
+                    if showProgress {
+                        Text(stage.message).font(.body).foregroundStyle(.white).multilineTextAlignment(.center)
+                            .accessibilityLabel("MileLog is loading. \(stage.message)")
+                    }
+                }.padding(32).frame(maxWidth: .infinity, minHeight: geometry.size.height)
+            }
+        }.background(Color.mileInk.ignoresSafeArea())
     }
 }
 struct RootView: View {

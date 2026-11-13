@@ -24,12 +24,8 @@ import UIKit
         manager.activityType = .automotiveNavigation
         manager.pausesLocationUpdatesAutomatically = false
         manager.showsBackgroundLocationIndicator = true
-        if var recovered = draft {
-            if !recovered.ended {
-                recovered.interrupted = true; recovered.updatedAt = Date()
-                recovered.interruptionReasons = Array(Set((recovered.interruptionReasons ?? []) + ["Recovered after app interruption"]))
-                _ = persist(recovered)
-            }
+        if draft != nil {
+            // Recovery metadata is checkpointed by the background startup loader.
             status = "Saved recording recovered — review before continuing"
         }
     }

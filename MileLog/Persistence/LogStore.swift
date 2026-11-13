@@ -12,86 +12,20 @@ import Observation
 @MainActor @Observable final class LogStore {
     private(set) var data = Backup()
     let container: ModelContainer
-    private let context: ModelContext
+    private let storage: RecordStorage
     @ObservationIgnored private let fileDirectory: URL?
-    @ObservationIgnored private var rowsByID: [UUID: StoredRecord] = [:]
     var error: String?
     var report = ReportSelection()
 
-    init(inMemory: Bool = false, existingContainer: ModelContainer? = nil, fileDirectory: URL? = nil) throws {
-        self.fileDirectory = fileDirectory ?? (inMemory ? FileManager.default.temporaryDirectory.appendingPathComponent("MileLog-test-\(UUID().uuidString)") : nil)
-        if let directory = self.fileDirectory { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
-        let config = ModelConfiguration(isStoredInMemoryOnly: inMemory, cloudKitDatabase: .none)
-        container = try existingContainer ?? ModelContainer(for: StoredRecord.self, configurations: config)
-        context = ModelContext(container)
-        context.autosaveEnabled = false
-        let rows = try context.fetch(FetchDescriptor<StoredRecord>())
-        rowsByID = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
-        let decoder = JSONDecoder()
-        for row in rows {
-            switch row.kind {
-            case "trip": data.trips.append(try decoder.decode(Trip.self, from: row.payload))
-            case "vehicle": data.vehicles.append(try decoder.decode(Vehicle.self, from: row.payload))
-            case "rate": data.rates.append(try decoder.decode(MileageRate.self, from: row.payload))
-            case "purpose": data.purposes.append(try decoder.decode(SavedPurpose.self, from: row.payload))
-            case "frequent": data.frequentTrips.append(try decoder.decode(FrequentTrip.self, from: row.payload))
-            case "feedback": data.feedback.append(try decoder.decode(FeedbackNote.self, from: row.payload))
-            case "draft": data.drafts.append(try decoder.decode(RecordingDraft.self, from: row.payload))
-            case "tombstone": data.tombstones = (data.tombstones ?? []) + [try decoder.decode(RecordTombstone.self, from: row.payload)]
-            case "preferences": data.preferences = try decoder.decode(LogPreferences.self, from: row.payload)
-            default: throw LogError("Unknown stored record. Open this data with a newer version of MileLog.")
-            }
-        }
-        let needsMigration = !rows.isEmpty && (data.preferences?.schemaVersion ?? 2) < 3
-        if needsMigration { _ = try backupFile() }
-        var upgraded = Recordkeeping.migrate(data)
-        if upgraded.preferences == nil {
-            var preferences = LogPreferences()
-            preferences.hasCompletedWelcome = !upgraded.vehicles.isEmpty || !upgraded.trips.isEmpty
-            preferences.defaultVehicleID = upgraded.vehicles.first?.id
-            // These were shipped by version 1. Remember deleted seeds rather than bringing them back.
-            if !rows.isEmpty { preferences.installedRateIDs = Self.legacyRateIDs }
-            upgraded.preferences = preferences
-        }
-        if rows.isEmpty {
-            upgraded.purposes = ["Client meeting", "Supply pickup", "Delivery"].map { SavedPurpose(text: $0) }
-        }
-        try applyBundledRates(to: &upgraded)
-        upgraded.version = 3
-        try commit(upgraded)
+    convenience init(inMemory: Bool = false, existingContainer: ModelContainer? = nil, fileDirectory: URL? = nil) throws {
+        try self.init(prepared: LogLoader.prepare(inMemory: inMemory, existingContainer: existingContainer, fileDirectory: fileDirectory))
     }
 
-    private static let legacyRateIDs = [
-        "0091b273-bf8a-539e-b5b2-e9278bbd43d5", "0f850d8a-121f-50f6-b2e4-ec05ef5c3e67",
-        "18d3b03c-d080-5dac-97e4-acde6ce116d0", "8a470214-4e23-5fa6-8493-4597458149b8",
-        "6dbcc59d-434a-5741-9132-531b806fefd5", "6e127686-80e1-5eba-8fba-8fc73b6e0a95",
-        "8981f0b2-5425-5a7d-90e0-f2e7a519e2b6", "b330952e-bfd1-5e03-8def-be511873d8d8",
-        "c066669e-3524-57eb-b3b4-5cd7188eb43f", "7574513a-cbc2-5f02-bdc4-1490d19b56ba",
-        "387f941c-1133-5779-84ea-22b15cff60bb", "c1c42f2c-a7ed-5f37-b9c2-e145acbb8f50"
-    ].compactMap(UUID.init(uuidString:))
-
-    private func applyBundledRates(to b: inout Backup) throws {
-        #if SWIFT_PACKAGE
-        let bundle = Bundle.module
-        #else
-        let bundle = Bundle.main
-        #endif
-        guard let url = bundle.url(forResource: "SeedRates", withExtension: "json") else {
-            throw LogError("The bundled rate table could not be opened.")
-        }
-        let seeds = try JSONDecoder().decode([MileageRate].self, from: Data(contentsOf: url))
-        var preferences = b.preferences ?? LogPreferences()
-        let seen = Set(preferences.installedRateIDs)
-        let deleted = Set((b.tombstones ?? []).filter { $0.kind == "rate" }.map(\.recordID))
-        for seed in seeds where !deleted.contains(seed.id) {
-            if b.rates.contains(where: { $0.id == seed.id }) {
-                // Existing rate records are historical data; never replace them automatically.
-            } else if !seen.contains(seed.id), (try? Validation.rate(seed, others: b.rates)) != nil {
-                b.rates.append(seed)
-            }
-        }
-        preferences.installedRateIDs = Array(seen.union(seeds.map(\.id)))
-        b.preferences = preferences
+    init(prepared: PreparedLog) {
+        container = prepared.container
+        storage = RecordStorage(container: prepared.container)
+        fileDirectory = prepared.fileDirectory
+        data = prepared.data
     }
 
     var preferences: LogPreferences { data.preferences ?? LogPreferences() }
@@ -107,35 +41,8 @@ import Observation
     var reportTrips: [Trip] { trips.filter(report.includes) }
 
     func commit(_ candidate: Backup) throws {
-        try BackupService.validate(candidate)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        var encoded: [(UUID, String, Data)] = []
-        func add<T: Record>(_ records: [T], _ kind: String) throws {
-            for record in records { encoded.append((record.id, kind, try encoder.encode(record))) }
-        }
-        try add(candidate.trips, "trip"); try add(candidate.vehicles, "vehicle")
-        try add(candidate.rates, "rate"); try add(candidate.purposes, "purpose")
-        try add(candidate.frequentTrips, "frequent"); try add(candidate.feedback, "feedback")
-        try add(candidate.drafts, "draft"); try add(candidate.tombstones ?? [], "tombstone")
-        if let preferences = candidate.preferences { try add([preferences], "preferences") }
-        var nextRows = rowsByID
-        do {
-            let ids = Set(encoded.map { $0.0 })
-            for (id, kind, payload) in encoded {
-                if let row = nextRows[id] {
-                    if row.payload != payload { row.payload = payload }
-                    if row.kind != kind { row.kind = kind }
-                } else {
-                    let row = StoredRecord(id: id, kind: kind, payload: payload)
-                    context.insert(row); nextRows[id] = row
-                }
-            }
-            for (id, row) in rowsByID where !ids.contains(id) { context.delete(row); nextRows.removeValue(forKey: id) }
-            try context.save()
-            rowsByID = nextRows
-            data = candidate
-        } catch { context.rollback(); throw error }
+        try storage.commit(candidate)
+        data = candidate
     }
 
     func savePreferences(_ preferences: LogPreferences) throws {
@@ -229,38 +136,26 @@ import Observation
     // The frequent GPS checkpoint touches only its one SwiftData row.
     func saveDraft(_ draft: RecordingDraft) throws {
         guard !(data.tombstones ?? []).contains(where: { $0.kind == "draft" && $0.recordID == draft.id }) else { throw LogError("This recording has already been saved or discarded.") }
-        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        let payload = try encoder.encode(draft)
-        let existing = rowsByID[draft.id]
-        guard existing == nil || existing?.kind == "draft" else { throw LogError("This trip has already been saved.") }
-        let row = existing ?? StoredRecord(id: draft.id, kind: "draft", payload: payload)
-        do {
-            if existing == nil { context.insert(row) } else { row.payload = payload }
-            try context.save()
-            rowsByID[draft.id] = row
-            if let index = data.drafts.firstIndex(where: { $0.id == draft.id }) { data.drafts[index] = draft }
-            else { data.drafts.append(draft) }
-        } catch { context.rollback(); throw error }
+        try storage.saveDraft(draft)
+        if let index = data.drafts.firstIndex(where: { $0.id == draft.id }) { data.drafts[index] = draft }
+        else { data.drafts.append(draft) }
     }
     func backupFile() throws -> URL {
         var b = data; b.exportedAt = Date()
         return try writeFile(BackupService.encode(b), name: "MileLog-backup-\(Day.string(Date()))-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(6)).json", permanent: true)
     }
     func writeFile(_ bytes: Data, name: String, permanent: Bool = false) throws -> URL {
-        let base = fileDirectory ?? (permanent ? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] : FileManager.default.temporaryDirectory)
-        let url = base.appendingPathComponent(name)
-        try bytes.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        return url
+        try LogFiles.write(bytes, name: name, permanent: permanent, directory: fileDirectory)
     }
     func restore(_ incoming: Backup) throws {
         var merged = try BackupService.merge(data, incoming)
-        try applyBundledRates(to: &merged)
+        try LogLoader.applyBundledRates(to: &merged)
         _ = try backupFile()
         try commit(merged)
     }
     func eraseLog() throws {
         var fresh = Backup(); fresh.preferences = LogPreferences()
-        try applyBundledRates(to: &fresh)
+        try LogLoader.applyBundledRates(to: &fresh)
         try commit(fresh)
         report = ReportSelection()
         let directories = fileDirectory.map { [$0] } ?? [FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0], FileManager.default.temporaryDirectory]
